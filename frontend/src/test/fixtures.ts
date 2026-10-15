@@ -1,0 +1,137 @@
+import type { Approval, Bill, PaymentAttempt, PaymentOutcome, WitnessReport } from "@/lib/types";
+
+const bill = (o: Partial<Bill> = {}): Bill => ({
+  id: "b1",
+  biller_id: "biller1",
+  biller_name: "City Electricity",
+  title: "Electricity bill",
+  category: "electricity",
+  amount: "2400.00",
+  currency: "INR",
+  due_date: "2026-10-20",
+  status: "paid",
+  source: "demo",
+  invoice_ref: null,
+  destination_account_number_masked: "••••••••0101",
+  destination_ifsc: "HDFC0001234",
+  destination_matches_approved: true,
+  created_at: "2026-10-11T10:00:00Z",
+  updated_at: "2026-10-11T10:00:00Z",
+  paid_at: null,
+  ...o,
+});
+
+const attempt = (o: Partial<PaymentAttempt> = {}): PaymentAttempt => ({
+  id: "a1",
+  bill_id: "b1",
+  bill_title: "Electricity bill",
+  approval_id: null,
+  amount: "2400.00",
+  currency: "INR",
+  destination_account_number_masked: "••••••••0101",
+  destination_ifsc: "HDFC0001234",
+  initiated_by_type: "agent",
+  decision: "allow",
+  status: "succeeded",
+  reason_code: "within_limit",
+  message: "ok",
+  bank_reference: "TXN-1",
+  created_at: "2026-10-11T10:00:00Z",
+  completed_at: null,
+  latest_witness_report_id: "w1",
+  ...o,
+});
+
+const witness = (o: Partial<WitnessReport> = {}): WitnessReport => ({
+  id: "w1",
+  attempt_id: "a1",
+  bill_id: "b1",
+  expected_outcome: "payment_present",
+  verdict: "confirmed_paid",
+  ledger_match_count: 1,
+  matched_transactions: [],
+  summary: "Found one matching transaction.",
+  ledger_source: "mock_bank_sqlite",
+  read_only: true,
+  window_start: "2026-10-11T09:00:00Z",
+  window_end: "2026-10-11T11:00:00Z",
+  checked_at: "2026-10-11T10:01:00Z",
+  ...o,
+});
+
+export const approvalFixture: Approval = {
+  id: "ap1",
+  bill_id: "b3",
+  bill_title: "Annual insurance premium",
+  biller_name: "Safe Insurance",
+  amount: "48000.00",
+  currency: "INR",
+  destination_account_number_masked: "••••••••0202",
+  destination_ifsc: "ICIC0004321",
+  details_hash: "hash",
+  status: "pending",
+  processing_status: "idle",
+  processing_message: null,
+  reason_code: "amount_exceeds_limit",
+  requested_by_type: "agent",
+  requested_at: "2026-10-11T10:00:00Z",
+  expires_at: "2026-10-12T10:00:00Z",
+  decided_at: null,
+  decided_by_name: null,
+  decision_note: null,
+  invalidated_reason: null,
+};
+
+export const normalOutcome: PaymentOutcome = {
+  decision: "allow",
+  reason_code: "within_limit",
+  message: "Paid.",
+  idempotent_replay: false,
+  attempt: attempt(),
+  bill: bill(),
+  approval: null,
+  witness_report: witness(),
+};
+
+export const maliciousOutcome: PaymentOutcome = {
+  decision: "deny",
+  reason_code: "beneficiary_not_approved",
+  message: "Blocked.",
+  idempotent_replay: false,
+  attempt: attempt({
+    decision: "deny",
+    status: "blocked",
+    reason_code: "beneficiary_not_approved",
+    bank_reference: null,
+    destination_account_number_masked: "••••••••1234",
+    destination_ifsc: "FAKE0000666",
+  }),
+  bill: bill({ status: "blocked", destination_matches_approved: false }),
+  approval: null,
+  witness_report: witness({
+    expected_outcome: "payment_absent",
+    verdict: "confirmed_no_payment",
+    ledger_match_count: 0,
+  }),
+};
+
+export const highValueOutcome: PaymentOutcome = {
+  decision: "require_approval",
+  reason_code: "amount_exceeds_limit",
+  message: "Needs approval.",
+  idempotent_replay: false,
+  attempt: attempt({
+    decision: "require_approval",
+    status: "requires_approval",
+    reason_code: "amount_exceeds_limit",
+    amount: "48000.00",
+    bank_reference: null,
+  }),
+  bill: bill({ status: "awaiting_approval", amount: "48000.00", category: "insurance" }),
+  approval: approvalFixture,
+  witness_report: witness({
+    expected_outcome: "payment_absent",
+    verdict: "confirmed_no_payment",
+    ledger_match_count: 0,
+  }),
+};

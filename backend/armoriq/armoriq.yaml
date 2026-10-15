@@ -1,0 +1,35 @@
+version: "v1"
+environment: production
+
+identity:
+  api_key: ${ARMORIQ_API_KEY}
+  user_id: keeper-backend
+  agent_id: keeper-payment-agent
+
+proxy:
+  url: https://proxy.armoriq.ai
+  timeout: 15
+  max_retries: 0
+
+# MCP Server Registration
+mcp_servers:
+  - id: keeper-payments
+    url: $KEEPER_MCP_PUBLIC_URL
+    description: "Keeper secure bill payment MCP server"
+    auth:
+      type: bearer
+      token: $KEEPER_MCP_INBOUND_SECRET
+
+# Policy Rules
+policy:
+  allow:
+    - keeper-payments.list_bills
+    - keeper-payments.get_bill
+    - keeper-payments.propose_payment
+    - keeper-payments.get_payment_status
+  deny:
+    - keeper-payments.execute_payment
+
+intent:
+  ttl_seconds: 60
+  require_csrg: true
