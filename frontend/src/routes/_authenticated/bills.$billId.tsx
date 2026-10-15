@@ -79,7 +79,7 @@ function BillDetailPage() {
     if (!payKey || pay.isPending) return;
     setPayError(null);
     try {
-      const res = await pay.mutateAsync(payKey);
+      const res = await pay.mutateAsync({ idempotency_key: payKey });
       setOutcome(res);
       setPayOpen(false);
       if (res.decision === "allow" && res.attempt.status === "succeeded")
@@ -106,7 +106,7 @@ function BillDetailPage() {
 
   async function recheck(attemptId: string) {
     try {
-      await verify.mutateAsync(attemptId);
+      await verify.mutateAsync({ attempt_id: attemptId });
       toast.success("The Witness checked the bank ledger again.");
     } catch (err) {
       toast.error(friendlyErrorMessage(err));

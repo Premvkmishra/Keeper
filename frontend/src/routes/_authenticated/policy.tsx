@@ -101,7 +101,7 @@ function PolicyPage() {
         );
         toast.error("Someone else changed this. We've reloaded the latest values.");
       } else {
-        if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors);
+        if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors || {});
         setFormErr(err);
         toast.error(friendlyErrorMessage(err));
       }

@@ -341,7 +341,7 @@ class UpdateBillBody(BaseModel):
     destination_ifsc: Optional[str] = Field(None, min_length=11, max_length=11)
 
 class PayBillBody(BaseModel):
-    idempotency_key: str = Field(..., min_length=1, max_length=128)
+    idempotency_key: Optional[str] = Field(None, max_length=128)
 
 class ApproveBody(BaseModel):
     details_hash: str = Field(..., min_length=1, max_length=128)

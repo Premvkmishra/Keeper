@@ -264,7 +264,7 @@ function BillerDialog({ biller, onClose }: { biller?: Biller; onClose: () => voi
       toast.success(biller ? "Biller updated." : "Biller added.");
       onClose();
     } catch (err) {
-      if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors);
+      if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors || {});
       setFormErr(err);
       toast.error(friendlyErrorMessage(err));
     }
@@ -375,7 +375,7 @@ function PayeeDialog({ biller, onClose }: { biller: Biller; onClose: () => void 
       toast.success("Approved payee added.");
       onClose();
     } catch (err) {
-      if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors);
+      if (err instanceof ApiError && err.code === "validation_error") setErrors(err.fieldErrors || {});
       setFormErr(err);
       toast.error(friendlyErrorMessage(err));
     }

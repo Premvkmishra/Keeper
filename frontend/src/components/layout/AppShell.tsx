@@ -7,7 +7,8 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useMe } from "@/lib/auth";
 import { MEMBER_ROLE } from "@/lib/format";
 import { useHealth, usePendingApprovalCount } from "@/lib/queries";
-import { getAuthClient } from "@/lib/supabase";
+import { api } from "@/lib/api";
+import { clearAuthToken, getAuthClient, isSupabaseConfigured } from "@/lib/supabase";
 
 type NavTo = "/" | "/bills" | "/approvals" | "/payments" | "/witness" | "/policy" | "/profile";
 
@@ -79,7 +80,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   async function signOut() {
     await qc.cancelQueries();
     qc.clear();
-    await getAuthClient().auth.signOut();
+    try {
+      await api.logout();
+    } catch {
+      // ignore
+    }
+    clearAuthToken();
+    if (isSupabaseConfigured()) {
+      try {
+        await getAuthClient().auth.signOut();
+      } catch {
+        // ignore
+      }
+    }
     window.location.replace("/login");
   }
 

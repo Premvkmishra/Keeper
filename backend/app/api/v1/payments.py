@@ -1,4 +1,5 @@
 from typing import Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -127,6 +128,10 @@ def get_payment(
         events=[event_to_dict(e) for e in events],
     )
 
+class WitnessVerifyBody(BaseModel):
+    attempt_id: Optional[str] = None
+    bill_id: Optional[str] = None
+
 @router.post("/payments/{attempt_id}/witness-verify", response_model=WitnessReportSchema)
 def witness_verify(
     attempt_id: str,
@@ -148,6 +153,28 @@ def witness_verify(
         expected_destination_account=at.destination_account_number,
     )
     return witness_to_dict(rep)
+
+@router.post("/witness/verify", response_model=WitnessReportSchema)
+def witness_verify_body(
+    body: WitnessVerifyBody,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    attempt_id = body.attempt_id
+    if not attempt_id and body.bill_id:
+        latest = (
+            db.query(PaymentAttempt)
+            .filter(PaymentAttempt.bill_id == body.bill_id, PaymentAttempt.household_id == user.household_id)
+            .order_by(PaymentAttempt.created_at.desc())
+            .first()
+        )
+        if not latest:
+            raise HTTPException(status_code=404, detail="No payment attempt found for bill.")
+        attempt_id = str(latest.id)
+    if not attempt_id:
+        raise HTTPException(status_code=400, detail="attempt_id or bill_id is required.")
+
+    return witness_verify(attempt_id=attempt_id, user=user, db=db)
 
 # Security Events
 @router.get("/security-events", response_model=ListResponse[SecurityEventSchema])

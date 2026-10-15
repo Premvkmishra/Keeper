@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Mock Bank
     MOCK_BANK_BASE_URL: str = "http://127.0.0.1:9000"
     MOCK_BANK_DATABASE_PATH: str = "backend/mock_bank/bank.sqlite"
-    MOCK_BANK_AUTH_TOKEN: Optional[str] = None
+    MOCK_BANK_AUTH_TOKEN: Optional[str] = "keeper-mock-bank-dev-token"
 
     # ArmorIQ configuration
     ARMORIQ_ENFORCEMENT: str = "required"  # "required" | "optional" | "disabled"
@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     MCP_AGENT_HOUSEHOLD_ID: str = "00000000-0000-0000-0000-000000000001"
 
     # CORS configuration
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:3000"
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082"
+
+    # Authentication
+    AUTH_JWT_SECRET: str = "keeper-demo-admin-secret"
+    AUTH_TOKEN_EXPIRE_HOURS: int = 24
 
     # Gemini agent
     LLM_PROVIDER: str = "gemini"

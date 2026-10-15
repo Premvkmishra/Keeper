@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI):
             ).scalar_one_or_none()
         if current_version is None or current_version < 4:
             raise RuntimeError("Supabase schema is not current; run backend/scripts/setup_supabase.py first.")
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        try:
+            seed_demo_household(db)
+            db.commit()
+        finally:
+            db.close()
 
     db = SessionLocal()
     try:
@@ -154,12 +161,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+is_dev = settings.APP_ENV.lower() in ("development", "dev", "testing", "test")
+cors_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$" if is_dev else None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+    allow_headers=["*"],
 )
 
 # Request ID & Error Envelope Handlers

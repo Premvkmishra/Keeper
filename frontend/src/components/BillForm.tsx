@@ -154,9 +154,9 @@ export function BillFormDialog({
             currency: "INR",
             due_date: v.due_date,
             ...(v.invoice_ref.trim() ? { invoice_ref: v.invoice_ref.trim() } : {}),
-            biller_id: v.biller_id || null,
-            destination_account_number: v.destination_account_number,
-            destination_ifsc: v.destination_ifsc,
+            biller_id: v.biller_id && v.biller_id !== "none" ? v.biller_id : undefined,
+            destination_account_number: v.destination_account_number.trim(),
+            destination_ifsc: v.destination_ifsc.trim().toUpperCase(),
           },
           file: documentFile,
         });

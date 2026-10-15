@@ -14,9 +14,11 @@ from pydantic import BaseModel, Field
 from dotenv import dotenv_values
 
 DB_PATH = os.environ.get("MOCK_BANK_DATABASE_PATH", "backend/mock_bank/bank.sqlite")
-MOCK_BANK_AUTH_TOKEN = os.environ.get("MOCK_BANK_AUTH_TOKEN") or dotenv_values(
-    Path(__file__).resolve().parents[1] / ".env"
-).get("MOCK_BANK_AUTH_TOKEN")
+MOCK_BANK_AUTH_TOKEN = (
+    os.environ.get("MOCK_BANK_AUTH_TOKEN")
+    or dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("MOCK_BANK_AUTH_TOKEN")
+    or "keeper-mock-bank-dev-token"
+)
 
 app = FastAPI(title="Keeper Mock Bank", version="1.0.0")
 
