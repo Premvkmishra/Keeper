@@ -1,13 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import { LogOut, Menu, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useMe } from "@/lib/auth";
 import { MEMBER_ROLE } from "@/lib/format";
 import { useHealth, usePendingApprovalCount } from "@/lib/queries";
-import { getAuthClient } from "@/lib/supabase";
 
 type NavTo = "/" | "/bills" | "/approvals" | "/payments" | "/witness" | "/policy" | "/profile";
 
@@ -71,17 +69,9 @@ export function DemoBadge() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const me = useMe();
-  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   useEffect(() => setOpen(false), [pathname]);
-
-  async function signOut() {
-    await qc.cancelQueries();
-    qc.clear();
-    await getAuthClient().auth.signOut();
-    window.location.replace("/login");
-  }
 
   return (
     <div className="min-h-screen">
@@ -112,9 +102,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
             <DemoBadge />
           </div>
-          <Button variant="outline" size="sm" onClick={signOut}>
-            <LogOut aria-hidden /> Sign out
-          </Button>
         </div>
       </header>
 

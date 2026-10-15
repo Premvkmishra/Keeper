@@ -43,7 +43,10 @@ def test_disabled_enforcement_fails_before_tool_invocation():
     gw = ArmorIQGateway()
     settings.ARMORIQ_ENFORCEMENT = "disabled"
 
-    res = gw.invoke_tool("propose_payment", {"bill_id": "b1", "idempotency_key": "k1"})
+    res = gw.invoke_tool(
+        "propose_payment",
+        {"bill_id": "b1", "idempotency_key": "k1"},
+    )
 
     assert res.status == "unavailable_before_send"
     assert "must be required" in (res.reason or "")
@@ -55,7 +58,10 @@ def test_decision_gate_cannot_authorize_local_execution():
     gw._initialized = True
     settings.ARMORIQ_ROUTE = "decision_gate"
 
-    res = gw.invoke_tool("propose_payment", {"bill_id": "b1", "idempotency_key": "k1"})
+    res = gw.invoke_tool(
+        "propose_payment",
+        {"bill_id": "b1", "idempotency_key": "k1"},
+    )
 
     assert res.status == "unavailable_before_send"
     assert not mock_client.start_session.called
@@ -117,11 +123,17 @@ def test_u2_correct_intent_plan_construction():
     gw.client = mock_client
     gw._initialized = True
 
-    res = gw.invoke_tool("propose_payment", {"bill_id": "b1", "idempotency_key": "k1"})
+    res = gw.invoke_tool(
+        "propose_payment",
+        {"bill_id": "b1", "idempotency_key": "k1"},
+        intent_prompt="The user explicitly approved bill b1 for payment.",
+    )
     assert res.status == "allowed_and_executed"
     # Verify capture_plan parameters
     mock_client.capture_plan.assert_called_once()
     args, kwargs = mock_client.capture_plan.call_args
+    assert kwargs["prompt"] == "The user explicitly approved bill b1 for payment."
+    assert kwargs["llm"] == settings.GEMINI_MODEL
     assert kwargs["plan"]["goal"] == "Invoke the permitted Keeper tool propose_payment."
     assert kwargs["plan"]["steps"][0]["action"] == "propose_payment"
     assert kwargs["plan"]["steps"][0]["mcp"] == settings.ARMORIQ_MCP_NAME

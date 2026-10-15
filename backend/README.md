@@ -96,7 +96,7 @@ cp .env.example .env
 
 Required variables:
 - `SUPABASE_DB_URL`: Supabase PostgreSQL connection string. Required outside isolated tests.
-- `SUPABASE_JWT_SECRET`: Supabase JWT signature verifier. The API rejects unsigned JWTs and refuses normal startup without it.
+- `SUPABASE_JWT_SECRET`: Supabase legacy JWT verifier and signing key for short-lived MCP household contexts. Use the Supabase JWT secret; never commit it.
 - `SUPABASE_URL`: Supabase project URL (`https://amzllkpjwzqjrvudqxie.supabase.co`).
 - `MOCK_BANK_BASE_URL`: Mock bank URL (default: `http://127.0.0.1:9000`).
 - `MOCK_BANK_AUTH_TOKEN`: Separate bearer secret shared between the backend and simulator.
@@ -105,6 +105,8 @@ Required variables:
 - `KEEPER_MCP_PUBLIC_URL`: Public HTTPS MCP URL ending in `/mcp`, registered in ArmorIQ.
 - `KEEPER_MCP_INBOUND_SECRET`: Shared secret for bearer authentication on `/mcp`.
 - `GEMINI_API_KEY`: Server-side Gemini API key.
+
+The frontend uses Supabase Auth email/password sign-in and sign-up. New accounts create a private household and default policy after authentication; Supabase email confirmation may need to be completed before sign-in, depending on the project’s Auth settings. There is no built-in demo-token login fallback.
 
 ---
 
@@ -116,7 +118,7 @@ From `backend/`, with `SUPABASE_DB_URL` available through `.env` or the process 
 .\.venv\Scripts\python.exe scripts\setup_supabase.py
 ```
 
-The command applies four versioned, non-destructive migrations and inserts only missing seed records. Seeded bills remain pending; no payment or Witness outcome is fabricated. API startup verifies migration version 4.
+The command applies five versioned, non-destructive migrations and inserts only missing seed records. Seeded bills remain pending; no payment or Witness outcome is fabricated. API startup verifies migration version 5. Migration 5 requires each authenticated user to belong to at most one household.
 
 ## Running Locally
 
@@ -143,6 +145,20 @@ curl http://127.0.0.1:8000/health
 cd backend
 docker-compose up --build
 ```
+
+## Production hosting (Render)
+
+For one Render web service that runs the Keeper API and its simulated bank:
+
+- Root directory: `backend`
+- Build command: `pip install .`
+- Start command: `sh render-start.sh`
+- Health check path: `/health`
+- Attach a persistent disk mounted at `/var/data`; set `MOCK_BANK_DATABASE_PATH=/var/data/bank_ledger.db`.
+- Configure backend secrets in Render's environment settings, not in a committed `.env`. Set `MOCK_BANK_AUTH_TOKEN` to a strong random value, `ARMORIQ_ENFORCEMENT=required`, `ARMORIQ_ROUTE=proxy`, and `KEEPER_MCP_PUBLIC_URL` to the Render HTTPS URL ending in `/mcp`.
+- Set `CORS_ORIGINS` to the exact Railway frontend origin. Set the frontend build-time `VITE_API_BASE_URL` to the Render API origin and configure Supabase Auth's Site URL/redirect URLs for the Railway domain.
+
+The mock bank uses a local SQLite ledger shared with the Witness verifier, so it runs in the same service/filesystem as the API and uses persistent storage. Do not scale this single-instance SQLite setup horizontally. Supabase remains the PostgreSQL database; the local mock bank is a payment simulator only.
 
 ---
 

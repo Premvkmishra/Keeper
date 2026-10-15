@@ -16,6 +16,7 @@ MIGRATIONS = (
     (2, "migrations/002_processing_state.sql"),
     (3, "migrations/003_bill_documents.sql"),
     (4, "migrations/004_bill_processing_key.sql"),
+    (5, "migrations/005_unique_household_user.sql"),
 )
 
 

@@ -116,6 +116,7 @@ class ArmorIQGateway:
         tool_name: str,
         params: Dict[str, Any],
         user_email: str = "agent@keeper.internal",
+        intent_prompt: Optional[str] = None,
     ) -> GatewayResult:
         """
         Executes an agent tool invocation governed by ArmorIQ.
@@ -161,8 +162,8 @@ class ArmorIQGateway:
         try:
             # 1. Capture Intent Plan
             plan_capture = self.client.capture_plan(
-                llm="keeper-agent-v1",
-                prompt=f"Execute tool {tool_name} with parameters",
+                llm=settings.GEMINI_MODEL,
+                prompt=(intent_prompt or f"Execute tool {tool_name} with parameters")[:4000],
                 plan={
                     "goal": f"Invoke the permitted Keeper tool {tool_name}.",
                     "steps": [
@@ -204,8 +205,8 @@ class ArmorIQGateway:
             # Token expired client-side before send: remint once safely
             try:
                 plan_capture = self.client.capture_plan(
-                    llm="keeper-agent-v1",
-                    prompt=f"Execute tool {tool_name} with parameters",
+                    llm=settings.GEMINI_MODEL,
+                    prompt=(intent_prompt or f"Execute tool {tool_name} with parameters")[:4000],
                     plan={
                         "goal": f"Invoke the permitted Keeper tool {tool_name}.",
                         "steps": [{"action": tool_name, "mcp": settings.ARMORIQ_MCP_NAME, "params": params}],

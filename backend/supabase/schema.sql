@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS household_members (
 );
 CREATE INDEX IF NOT EXISTS idx_household_members_user_id ON household_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_household_members_email ON household_members(email);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_household_member_user_id_idx ON household_members(user_id);
 
 -- 3. Household Policies
 CREATE TABLE IF NOT EXISTS household_policies (

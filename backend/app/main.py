@@ -57,6 +57,12 @@ async def lifespan(app: FastAPI):
                     "ON payment_attempts (household_id, idempotency_key)"
                 )
             )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_household_member_user_id_idx "
+                    "ON household_members (user_id)"
+                )
+            )
         db = SessionLocal()
         try:
             seed_demo_household(db)
@@ -69,7 +75,7 @@ async def lifespan(app: FastAPI):
             current_version = connection.execute(
                 text("SELECT MAX(version) FROM keeper_schema_migrations")
             ).scalar_one_or_none()
-        if current_version is None or current_version < 4:
+        if current_version is None or current_version < 5:
             raise RuntimeError("Supabase schema is not current; run backend/scripts/setup_supabase.py first.")
 
     db = SessionLocal()

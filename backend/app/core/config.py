@@ -12,11 +12,6 @@ class Settings(BaseSettings):
     ALLOW_LOCAL_SQLITE: bool = False
     SUPABASE_URL: str = "https://amzllkpjwzqjrvudqxie.supabase.co"
     SUPABASE_JWT_SECRET: Optional[str] = None
-    DEMO_ADMIN_USERNAME: str = "admin"
-    DEMO_ADMIN_PASSWORD: str = "admin"
-    DEMO_ADMIN_EMAIL: str = "admin@keeper.local"
-    DEMO_ADMIN_JWT_SECRET: str = "keeper-demo-admin-secret"
-
     # Mock Bank
     MOCK_BANK_BASE_URL: str = "http://127.0.0.1:9000"
     MOCK_BANK_DATABASE_PATH: str = "backend/mock_bank/bank.sqlite"
@@ -36,7 +31,7 @@ class Settings(BaseSettings):
     MCP_AGENT_HOUSEHOLD_ID: str = "00000000-0000-0000-0000-000000000001"
 
     # CORS configuration
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:3000"
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:8080"
 
     # Gemini agent
     LLM_PROVIDER: str = "gemini"

@@ -1,242 +1,226 @@
-import { useState, type FormEvent, type ReactNode } from "react";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { useState, type FormEvent } from "react";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { FieldError, SubmitLabel } from "@/components/common";
-import { DemoBadge } from "@/components/layout/AppShell";
-import {
-  DEV_TOKEN,
-  getAuthClient,
-  isAuthConfigured,
-  isDevAuth,
-  isSupabaseConfigured,
-} from "@/lib/supabase";
+import { ensureHouseholdForCurrentUser } from "@/lib/onboarding";
+import { getAuthClient, isSupabaseConfigured } from "@/lib/supabase";
 
 export const Route = createFileRoute("/login")({
   ssr: false,
-  head: () => ({
-    meta: [
-      { title: "Sign in — Keeper" },
-      {
-        name: "description",
-        content: "Sign in to Keeper to review bills, approvals and safety checks.",
-      },
-      { property: "og:title", content: "Sign in — Keeper" },
-      {
-        property: "og:description",
-        content: "Sign in to Keeper to review bills, approvals and safety checks.",
-      },
-    ],
-  }),
-  beforeLoad: async () => {
-    if (isDevAuth()) throw redirect({ to: "/" });
-    if (!isSupabaseConfigured()) return;
-    const { data } = await getAuthClient().auth.getSession();
-    if (data.session) throw redirect({ to: "/" });
-  },
   component: LoginPage,
 });
 
-function LoginPage() {
-  const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+export function LoginPage() {
+  const router = useRouter();
+  const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [householdName, setHouseholdName] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const authConfigured = isSupabaseConfigured();
 
-  if (!isSupabaseConfigured()) {
-    return (
-      <Shell>
-        <div
-          role="alert"
-          className="rounded-lg border border-warning/40 bg-warning-bg p-4 text-warning"
-        >
-          <p className="font-bold">Supabase Cloud sign-in is not configured.</p>
-          <p className="mt-1">
-            To connect live Supabase, set <code>VITE_SUPABASE_ANON_KEY</code> in{" "}
-            <code>frontend/.env</code>.
-          </p>
-        </div>
-        <div className="mt-6 border-t pt-6">
-          <p className="mb-3 text-sm text-muted-foreground">
-            Or test locally right now with the pre-seeded owner account:
-          </p>
-          <Button
-            type="button"
-            className="w-full h-12 text-base font-bold"
-            onClick={async () => {
-              localStorage.setItem("keeper_dev_token", DEV_TOKEN);
-              await navigate({ to: "/", replace: true });
-            }}
-          >
-            Sign in with Local Dev Account (u1@test.com)
-          </Button>
-        </div>
-      </Shell>
-    );
+  async function continueToKeeper(profile?: { displayName?: string; householdName?: string }) {
+    await ensureHouseholdForCurrentUser(profile);
+    await router.navigate({ to: "/" });
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (pending) return;
-    setError(null);
-    setNotice(null);
-    if (!email.trim()) return setError("Please enter your email.");
-    if (mode === "signup" && password.length < 8)
-      return setError("Your password needs at least 8 characters.");
-    if (!password) return setError("Please enter your password.");
-    setPending(true);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    setSubmitting(true);
+
     try {
+      if (!authConfigured) {
+        throw new Error(
+          "Sign-in is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in frontend/.env.",
+        );
+      }
+
       const auth = getAuthClient().auth;
-      if (mode === "signin") {
-        const { error } = await auth.signInWithPassword({ email: email.trim(), password });
-        if (error) throw error;
-        await navigate({ to: "/", replace: true });
-      } else {
-        const { data, error } = await auth.signUp({
+      if (mode === "login") {
+        const { error: authError } = await auth.signInWithPassword({
           email: email.trim(),
           password,
-          options: { emailRedirectTo: window.location.origin },
         });
-        if (error) throw error;
-        if (data.session) await navigate({ to: "/", replace: true });
-        else setNotice("Account created. Please check your email to confirm, then sign in.");
+        if (authError) throw authError;
+        await continueToKeeper();
+        return;
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "We couldn't sign you in. Please try again.");
+
+      const { data, error: authError } = await auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            display_name: displayName.trim(),
+            household_name: householdName.trim(),
+          },
+        },
+      });
+      if (authError) throw authError;
+
+      if (data.session) {
+        await continueToKeeper({
+          displayName: displayName.trim(),
+          householdName: householdName.trim(),
+        });
+      } else {
+        setMode("login");
+        setNotice("Account created. Check your email to confirm it, then sign in to continue.");
+      }
+    } catch (cause) {
+      const authError =
+        cause instanceof Error ? (cause as Error & { status?: number; code?: string }) : null;
+      if (
+        authError?.status === 429 ||
+        authError?.code === "over_email_send_rate_limit" ||
+        authError?.message.toLowerCase().includes("email rate limit exceeded")
+      ) {
+        setError(
+          "Supabase has temporarily rate-limited confirmation emails. Wait before retrying. To send signup emails to Gmail and other addresses reliably, configure custom SMTP in Supabase Auth; its built-in email service is limited to 2 emails per hour.",
+        );
+      } else {
+        setError(
+          cause instanceof Error ? cause.message : "Unable to complete sign-in. Please retry.",
+        );
+      }
     } finally {
-      setPending(false);
+      setSubmitting(false);
     }
   }
 
+  function changeMode(nextMode: "login" | "signup") {
+    setMode(nextMode);
+    setError("");
+    setNotice("");
+  }
+
   return (
-    <Shell>
-      <h1 className="mb-1">{mode === "signin" ? "Sign in to Keeper" : "Create your account"}</h1>
-      <p className="mb-6 text-muted-foreground">Keeper helps you pay bills safely.</p>
-      <form onSubmit={submit} noValidate className="space-y-4">
-        <div>
-          <Label htmlFor="email" className="text-base font-bold">
-            Email
-          </Label>
-          <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 h-12 text-base"
-            aria-describedby={error ? "login-error" : undefined}
-          />
+    <main className="flex min-h-screen items-center justify-center px-4 py-10">
+      <section className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm sm:p-8">
+        <div className="mb-7 text-center">
+          <p className="text-3xl font-bold text-primary">Keeper</p>
+          <p className="mt-2 text-muted-foreground">
+            Safe bill payments, with a person in control.
+          </p>
         </div>
-        <div>
-          <Label htmlFor="password" className="text-base font-bold">
-            Password
-          </Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete={mode === "signin" ? "current-password" : "new-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 h-12 text-base"
-            aria-describedby={mode === "signup" ? "pw-hint" : undefined}
-          />
-          {mode === "signup" && (
-            <p id="pw-hint" className="mt-1 text-muted-foreground">
-              At least 8 characters.
-            </p>
-          )}
+
+        <div
+          className="mb-6 grid grid-cols-2 gap-2 rounded-xl bg-muted p-1"
+          role="tablist"
+          aria-label="Account"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "login"}
+            className={`min-h-11 rounded-lg px-3 font-bold ${mode === "login" ? "bg-card text-primary shadow-sm" : "text-muted-foreground"}`}
+            onClick={() => changeMode("login")}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "signup"}
+            className={`min-h-11 rounded-lg px-3 font-bold ${mode === "signup" ? "bg-card text-primary shadow-sm" : "text-muted-foreground"}`}
+            onClick={() => changeMode("signup")}
+          >
+            Sign up
+          </button>
         </div>
-        <div aria-live="polite">
-          <FieldError id="login-error" msg={error ?? undefined} />
-          {notice && (
-            <p className="rounded-md bg-success-bg p-3 font-bold text-success">{notice}</p>
-          )}
-        </div>
-        <Button type="submit" className="w-full" disabled={pending}>
-          <SubmitLabel
-            pending={pending}
-            idle={mode === "signin" ? "Sign in" : "Create account"}
-            busy={mode === "signin" ? "Signing in…" : "Creating…"}
-          />
-        </Button>
-      </form>
-      <Button
-        variant="link"
-        className="mt-4 px-0"
-        onClick={() => {
-          setMode(mode === "signin" ? "signup" : "signin");
-          setError(null);
-          setNotice(null);
-        }}
-      >
-        {mode === "signin" ? "Create account" : "I already have an account — sign in"}
-      </Button>
-      <div className="mt-6 border-t pt-4 space-y-3">
-        <p className="mb-2 text-xs text-muted-foreground text-center">
-          Local Development Shortcut:
+
+        <h1 className="text-2xl font-bold">
+          {mode === "login" ? "Welcome back" : "Create your Keeper account"}
+        </h1>
+        <p className="mt-2 text-muted-foreground">
+          {mode === "login"
+            ? "Sign in with your email and password."
+            : "Your new account starts a private household that you manage."}
         </p>
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full h-11 text-sm font-semibold"
-          onClick={async () => {
-            localStorage.setItem("keeper_dev_token", DEV_TOKEN);
-            await navigate({ to: "/", replace: true });
-          }}
-        >
-          Sign in with Local Dev Account (u1@test.com)
-        </Button>
-        <Button
-          type="button"
-          variant="default"
-          className="w-full h-11 text-sm font-semibold"
-          onClick={async () => {
-            setPending(true);
-            setError(null);
-            try {
-              const response = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"}/api/v1/auth/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username: "admin", password: "admin" }),
-              });
 
-              const json = (await response.json().catch(() => null)) as
-                | { token?: string; error?: { message?: string } }
-                | null;
+        <form className="mt-6 space-y-4" onSubmit={(event) => void submit(event)}>
+          {mode === "signup" ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="display-name">Your name</Label>
+                <Input
+                  id="display-name"
+                  autoComplete="name"
+                  required
+                  maxLength={255}
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="household-name">Household name</Label>
+                <Input
+                  id="household-name"
+                  autoComplete="organization"
+                  required
+                  maxLength={255}
+                  value={householdName}
+                  onChange={(event) => setHouseholdName(event.target.value)}
+                />
+              </div>
+            </>
+          ) : null}
 
-              if (!response.ok || !json?.token) {
-                throw new Error(json?.error?.message ?? "Admin login failed.");
-              }
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              maxLength={255}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <Input
+              id="password"
+              type="password"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              required
+              minLength={mode === "signup" ? 8 : undefined}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            {mode === "signup" ? (
+              <p className="text-sm text-muted-foreground">Use at least 8 characters.</p>
+            ) : null}
+          </div>
 
-              localStorage.setItem("keeper_dev_token", json.token);
-              await navigate({ to: "/", replace: true });
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "Admin login failed.");
-            } finally {
-              setPending(false);
-            }
-          }}
-        >
-          Sign in as admin (admin / admin)
-        </Button>
-      </div>
-    </Shell>
-  );
-}
+          {error ? (
+            <p role="alert" className="rounded-lg bg-danger-bg p-3 text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+          {notice ? (
+            <p role="status" className="rounded-lg bg-info-bg p-3 text-sm text-info">
+              {notice}
+            </p>
+          ) : null}
 
-function Shell({ children }: { children: ReactNode }) {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center px-4 py-10">
-      <div className="mb-6 flex flex-col items-center gap-3">
-        <span className="text-4xl font-bold text-primary">Keeper</span>
-        <DemoBadge />
-      </div>
-      <div className="w-full max-w-md rounded-lg border bg-card p-6">{children}</div>
-      <p className="mt-6 text-muted-foreground">Keeper never moves real money in this demo.</p>
+          <Button type="submit" className="w-full" disabled={submitting}>
+            {submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+          </Button>
+          {!authConfigured ? (
+            <p className="text-sm text-warning" role="status">
+              Authentication needs Supabase configuration before sign-in or sign-up can work.
+            </p>
+          ) : null}
+        </form>
+      </section>
     </main>
   );
 }

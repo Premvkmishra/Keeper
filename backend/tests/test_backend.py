@@ -54,21 +54,9 @@ def test_unauthenticated_request(client):
     assert res.json()["error"]["code"] == "unauthenticated"
 
 
-def test_demo_admin_login_mints_token(client, db):
-    from backend.app.core.seed import seed_demo_household
-
-    seed_demo_household(db)
-
+def test_demo_admin_login_is_not_available(client):
     res = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin"})
-    assert res.status_code == 200
-    payload = res.json()
-    assert payload["token"]
-    assert payload["user"]["email"] == "admin@keeper.local"
-
-    me = client.get("/api/v1/me", headers={"Authorization": f"Bearer {payload['token']}"})
-    assert me.status_code == 200
-    assert me.json()["email"] == "admin@keeper.local"
-    assert me.json()["role"] == "owner"
+    assert res.status_code == 404
 
 
 def test_auth_fails_closed_without_jwt_secret(client, seed_data):
@@ -80,8 +68,8 @@ def test_auth_fails_closed_without_jwt_secret(client, seed_data):
     finally:
         settings.SUPABASE_JWT_SECRET = previous_secret
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "dependency_unavailable"
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthenticated"
 
 def test_user_without_household(client):
     token = make_auth_token(str(uuid.uuid4()), "stranger@test.com")
@@ -405,3 +393,58 @@ def test_policy_version_conflict(client, seed_data):
 def test_legacy_demo_payment_endpoint_is_not_registered(client):
     response = client.post("/api/v1/demo/scenarios/normal_payment/run")
     assert response.status_code == 404
+
+
+def test_approval_schedules_agent_processing_when_services_are_configured(
+    client, seed_data, monkeypatch
+):
+    token = make_auth_token(seed_data["owner_id"], "owner@test.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    for name, value in {
+        "ARMORIQ_ENFORCEMENT": "required",
+        "ARMORIQ_ROUTE": "proxy",
+        "ARMORIQ_API_KEY": "test-key",
+        "KEEPER_MCP_PUBLIC_URL": "https://mcp.example.test/mcp",
+        "KEEPER_MCP_INBOUND_SECRET": "test-inbound",
+        "MOCK_BANK_AUTH_TOKEN": "test-bank",
+        "SUPABASE_JWT_SECRET": "keeper-test-only-secret-key-with-more-than-32-bytes",
+        "GEMINI_API_KEY": "test-gemini-key",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+
+    bill = client.post(
+        "/api/v1/bills",
+        headers=headers,
+        json={
+            "title": "Approved insurance bill",
+            "category": "insurance",
+            "amount": "48000.00",
+            "currency": "INR",
+            "due_date": "2026-11-30",
+            "destination_account_number": "112233440101",
+            "destination_ifsc": "HDFC0001234",
+        },
+    )
+    assert bill.status_code == 201
+    outcome = client.post(
+        f"/api/v1/bills/{bill.json()['id']}/pay",
+        headers=headers,
+        json={"idempotency_key": "approval-flow-key"},
+    )
+    assert outcome.status_code == 200
+    approval = outcome.json()["approval"]
+
+    scheduled = []
+    monkeypatch.setattr(
+        "backend.app.api.v1.approvals.run_approved_payment",
+        lambda *args: scheduled.append(args),
+    )
+    approved = client.post(
+        f"/api/v1/approvals/{approval['id']}/approve",
+        headers=headers,
+        json={"details_hash": approval["details_hash"]},
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["processing_status"] == "processing"
+    assert scheduled == [(approval["id"], "owner@test.com")]

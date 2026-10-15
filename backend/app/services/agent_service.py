@@ -1,5 +1,4 @@
 """Gemini-backed Keeper agent. Tools run only through ArmorIQ or an explicit local-unprotected path."""
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -115,6 +114,7 @@ class AgentService:
         name: str,
         arguments: Dict[str, Any],
         user_email: str,
+        intent_prompt: str,
     ) -> Dict[str, Any]:
         if name not in ALLOWED_TOOLS:
             return {"error": "tool_not_permitted", "message": f"Tool '{name}' is not available to the agent."}
@@ -123,7 +123,12 @@ class AgentService:
             **arguments,
             "authorization_context": create_authorization_context(household_id, user_email),
         }
-        result = armoriq_gateway.invoke_tool(name, scoped_arguments, user_email=user_email)
+        result = armoriq_gateway.invoke_tool(
+            name,
+            scoped_arguments,
+            user_email=user_email,
+            intent_prompt=intent_prompt,
+        )
         if result.status == "denied_by_armoriq":
             event = SecurityEvent(
                 household_id=household_id,
@@ -424,7 +429,7 @@ class AgentService:
                 raw_args = dict(fc.args or {})
                 if approved_bill_id:
                     if name == "get_bill" and raw_args.get("bill_id") == approved_bill_id:
-                        result = self._run_tool(db, household_id, name, raw_args, user_email)
+                        result = self._run_tool(db, household_id, name, raw_args, user_email, message)
                         approved_bill_loaded = not result.get("error")
                     elif name == "propose_payment" and raw_args.get("bill_id") == approved_bill_id and approved_bill_loaded:
                         result = self._run_tool(
@@ -433,6 +438,7 @@ class AgentService:
                             name,
                             {"bill_id": approved_bill_id, "idempotency_key": idempotency_key},
                             user_email,
+                            message,
                         )
                     else:
                         result = {"error": "approval_scope_violation", "message": "Only the approved bill may be processed."}
@@ -442,7 +448,7 @@ class AgentService:
                         "message": "Payment tools are available only from an explicit, backend-scoped bill request.",
                     }
                 else:
-                    result = self._run_tool(db, household_id, name, raw_args, user_email)
+                    result = self._run_tool(db, household_id, name, raw_args, user_email, message)
                 tool_trace.append({"tool": name, "arguments": raw_args, "result": result})
                 fn_response_parts.append(
                     types.Part.from_function_response(name=name, response=result if isinstance(result, dict) else {"result": result})

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     JSON,
     UniqueConstraint,
     text,
@@ -55,7 +56,10 @@ class HouseholdMember(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
     household = relationship("Household", back_populates="members")
-    __table_args__ = (UniqueConstraint("household_id", "user_id", name="uq_household_member_user"),)
+    __table_args__ = (
+        UniqueConstraint("household_id", "user_id", name="uq_household_member_user"),
+        Index("uq_household_member_user_id_idx", "user_id", unique=True),
+    )
 
 class HouseholdPolicy(Base):
     __tablename__ = "household_policies"

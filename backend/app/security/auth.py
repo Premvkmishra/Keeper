@@ -46,50 +46,35 @@ class AuthenticatedUser:
         )
 
 def decode_token(token: str) -> Dict[str, Any]:
-    """Verify a Supabase JWT via JWKS or accept the local demo admin JWT."""
-    try:
-        return jwt.decode(
-            token,
-            settings.DEMO_ADMIN_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except jwt.PyJWTError:
-        pass
-
-    if not settings.SUPABASE_JWT_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "dependency_unavailable",
-                "message": "SUPABASE_JWT_SECRET is not configured; authentication is unavailable.",
-            },
-        )
-    try:
-        return jwt.decode(
-            token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except jwt.PyJWTError:
+    """Verify a Supabase JWT using its legacy secret or configured JWKS."""
+    if settings.SUPABASE_JWT_SECRET:
         try:
-            if not settings.SUPABASE_URL:
-                raise ValueError("missing supabase url")
-            jwks_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
-            jwks_client = PyJWKClient(jwks_url)
-            signing_key = jwks_client.get_signing_key_from_jwt(token)
             return jwt.decode(
                 token,
-                signing_key.key,
-                algorithms=["ES256"],
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
                 options={"verify_aud": False},
             )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "unauthenticated", "message": f"Invalid token: {str(e)}"},
-            )
+        except jwt.PyJWTError:
+            pass
+
+    try:
+        if not settings.SUPABASE_URL:
+            raise ValueError("Supabase URL is not configured.")
+        jwks_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        jwks_client = PyJWKClient(jwks_url)
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256"],
+            options={"verify_aud": False},
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "unauthenticated", "message": "Invalid or expired access token."},
+        ) from exc
 
 def get_current_user(
     authorization: Optional[str] = Header(None),

@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 DEMO_HOUSEHOLD_ID = "00000000-0000-0000-0000-000000000001"
 DEMO_OWNER_USER_ID = "u1"
 DEMO_OWNER_EMAIL = "u1@test.com"
-DEMO_ADMIN_USER_ID = "admin"
-DEMO_ADMIN_EMAIL = "admin@keeper.local"
 
 
 def seed_demo_household(db: Session) -> None:
@@ -54,22 +52,6 @@ def seed_demo_household(db: Session) -> None:
                 user_id=DEMO_OWNER_USER_ID,
                 email=DEMO_OWNER_EMAIL,
                 display_name="Demo Owner",
-                role="owner",
-            )
-        )
-
-    admin_member = (
-        db.query(HouseholdMember)
-        .filter(HouseholdMember.household_id == hid, HouseholdMember.email == DEMO_ADMIN_EMAIL)
-        .first()
-    )
-    if not admin_member:
-        db.add(
-            HouseholdMember(
-                household_id=hid,
-                user_id=DEMO_ADMIN_USER_ID,
-                email=DEMO_ADMIN_EMAIL,
-                display_name="System Admin",
                 role="owner",
             )
         )

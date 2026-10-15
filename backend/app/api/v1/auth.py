@@ -1,87 +1,103 @@
-from datetime import datetime, timedelta, timezone
-
-import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.core.seed import DEMO_ADMIN_EMAIL, DEMO_ADMIN_USER_ID, seed_demo_household
-from backend.app.models.models import Household, HouseholdMember
-from backend.app.security.auth import AuthenticatedUser, get_current_user
+from backend.app.models.models import Household, HouseholdMember, HouseholdPolicy
+from backend.app.security.auth import AuthenticatedUser, decode_token, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+class HouseholdBootstrapRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    household_name: str = Field(..., min_length=1, max_length=255)
+    display_name: str = Field(..., min_length=1, max_length=255)
 
 
-class LoginResponse(BaseModel):
-    token: str
-    user: dict
-
-
-def _issue_demo_admin_token() -> str:
-    payload = {
-        "sub": DEMO_ADMIN_USER_ID,
-        "email": DEMO_ADMIN_EMAIL,
-        "role": "owner",
-        "household_id": "00000000-0000-0000-0000-000000000001",
-        "exp": datetime.now(timezone.utc) + timedelta(days=30),
-    }
-    return jwt.encode(payload, settings.DEMO_ADMIN_JWT_SECRET, algorithm="HS256")
-
-
-@router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    username = (payload.username or "").strip()
-    password = payload.password or ""
-
-    if username != settings.DEMO_ADMIN_USERNAME or password != settings.DEMO_ADMIN_PASSWORD:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "unauthenticated", "message": "Invalid username or password."},
-        )
-
-    seed_demo_household(db)
-
-    household = db.query(Household).filter(Household.id == settings.MCP_AGENT_HOUSEHOLD_ID).first()
+def _membership_response(member: HouseholdMember) -> dict:
+    household = member.household
     if not household:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "dependency_unavailable", "message": "Demo household seed is missing."},
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "household_unavailable", "message": "The account's household is unavailable."},
         )
-
-    member = (
-        db.query(HouseholdMember)
-        .filter(HouseholdMember.household_id == household.id, HouseholdMember.email == DEMO_ADMIN_EMAIL)
-        .first()
-    )
-    if not member:
-        member = HouseholdMember(
-            household_id=household.id,
-            user_id=DEMO_ADMIN_USER_ID,
-            email=DEMO_ADMIN_EMAIL,
-            display_name="System Admin",
-            role="owner",
-        )
-        db.add(member)
-        db.commit()
-
-    token = _issue_demo_admin_token()
     return {
-        "token": token,
-        "user": {
-            "user_id": DEMO_ADMIN_USER_ID,
-            "email": DEMO_ADMIN_EMAIL,
-            "display_name": "System Admin",
-            "role": "owner",
-            "household": {"id": household.id, "name": household.name, "currency": household.currency},
-        },
+        "user_id": member.user_id,
+        "email": member.email,
+        "display_name": member.display_name,
+        "role": member.role,
+        "household": {"id": household.id, "name": household.name, "currency": household.currency},
     }
+
+
+@router.post("/household")
+def bootstrap_household(
+    body: HouseholdBootstrapRequest,
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "unauthenticated", "message": "A valid Supabase access token is required."},
+        )
+    claims = decode_token(authorization.split(" ", 1)[1].strip())
+    user_id = claims.get("sub")
+    email = claims.get("email")
+    if not isinstance(user_id, str) or not user_id or not isinstance(email, str) or not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "unauthenticated", "message": "Access token is missing user identity claims."},
+        )
+
+    member = db.query(HouseholdMember).filter(HouseholdMember.user_id == user_id).first()
+    if member:
+        return _membership_response(member)
+
+    member = db.query(HouseholdMember).filter(HouseholdMember.email == email).first()
+    if member:
+        member.user_id = user_id
+        db.commit()
+        db.refresh(member)
+        return _membership_response(member)
+
+    household = Household(name=body.household_name, currency="INR")
+    db.add(household)
+    db.flush()
+    member = HouseholdMember(
+        household_id=household.id,
+        user_id=user_id,
+        email=email,
+        display_name=body.display_name,
+        role="owner",
+    )
+    db.add(member)
+    db.add(
+        HouseholdPolicy(
+            household_id=household.id,
+            auto_pay_limit=10000.00,
+            currency="INR",
+            approval_ttl_minutes=1440,
+            version=1,
+            updated_by_user_id=user_id,
+            updated_by_name=body.display_name,
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        existing = db.query(HouseholdMember).filter(HouseholdMember.user_id == user_id).first()
+        if existing:
+            return _membership_response(existing)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "household_setup_conflict", "message": "Household setup conflicted; please retry."},
+        ) from exc
+    db.refresh(member)
+    return _membership_response(member)
 
 
 @router.get("/me")

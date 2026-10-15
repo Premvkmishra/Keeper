@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -7,46 +7,56 @@ import { AppShell, DemoBadge } from "@/components/layout/AppShell";
 import { ErrorAlert } from "@/components/common";
 import { api, ApiError, onUnauthorized } from "@/lib/api";
 import { MeProvider } from "@/lib/auth";
+import { ensureHouseholdForCurrentUser } from "@/lib/onboarding";
 import { qk } from "@/lib/queries";
-import { getAuthClient, isAuthConfigured, isDevAuth, isSupabaseConfigured } from "@/lib/supabase";
+import { getAuthClient, isSupabaseConfigured } from "@/lib/supabase";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async () => {
-    if (isDevAuth()) return;
-    if (!isAuthConfigured()) throw redirect({ to: "/login" });
+    if (!isSupabaseConfigured()) throw redirect({ to: "/login" });
     const { data } = await getAuthClient().auth.getSession();
     if (!data.session) throw redirect({ to: "/login" });
   },
   component: AuthedLayout,
 });
 
-async function signOutToLogin(qc: ReturnType<typeof useQueryClient>) {
+async function stayInApp(qc: ReturnType<typeof useQueryClient>) {
   await qc.cancelQueries();
   qc.clear();
-  localStorage.removeItem("keeper_dev_token");
-  if (isSupabaseConfigured()) {
-    try {
-      await getAuthClient().auth.signOut();
-    } catch {
-      // ignore
-    }
-  }
+  if (isSupabaseConfigured()) await getAuthClient().auth.signOut({ scope: "local" });
   window.location.replace("/login");
 }
 
 function AuthedLayout() {
   const qc = useQueryClient();
   const me = useQuery({ queryKey: qk.me, queryFn: api.me, retry: false });
+  const [setupPending, setSetupPending] = useState(false);
+  const [setupError, setSetupError] = useState("");
 
   useEffect(() => {
-    onUnauthorized(() => void signOutToLogin(qc));
+    onUnauthorized(() => void stayInApp(qc));
     if (!isSupabaseConfigured()) return;
     const { data } = getAuthClient().auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") window.location.replace("/login");
     });
     return () => data.subscription.unsubscribe();
   }, [qc]);
+
+  async function setupHousehold() {
+    setSetupPending(true);
+    setSetupError("");
+    try {
+      await ensureHouseholdForCurrentUser();
+      await me.refetch();
+    } catch (cause) {
+      setSetupError(
+        cause instanceof Error ? cause.message : "Household setup failed. Please retry.",
+      );
+    } finally {
+      setSetupPending(false);
+    }
+  }
 
   if (me.isLoading) {
     return (
@@ -73,25 +83,34 @@ function AuthedLayout() {
             <>
               <h1>Account not set up yet</h1>
               <p className="mt-3">
-                You're signed in, but your account isn't part of a household yet. The person who
-                runs Keeper's setup needs to create your household and add you to it. You can't do
-                this from here.
+                Finish setting up your private Keeper household to start using the app.
               </p>
-              <p className="mt-3 text-muted-foreground">
-                Once they tell you it's done, press "Check again".
-              </p>
+              {setupError ? (
+                <p role="alert" className="mt-3 text-danger">
+                  {setupError}
+                </p>
+              ) : null}
+              <Button
+                className="mt-4"
+                onClick={() => void setupHousehold()}
+                disabled={setupPending}
+              >
+                {setupPending ? "Setting up…" : "Set up my household"}
+              </Button>
             </>
           ) : (
             <ErrorAlert error={me.error} />
           )}
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button onClick={() => me.refetch()} disabled={me.isFetching}>
-              {me.isFetching ? "Checking…" : "Check again"}
-            </Button>
-            <Button variant="outline" onClick={() => void signOutToLogin(qc)}>
-              Sign out
-            </Button>
-          </div>
+          {!noHousehold ? (
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button onClick={() => me.refetch()} disabled={me.isFetching}>
+                {me.isFetching ? "Checking…" : "Check again"}
+              </Button>
+              <Button variant="outline" onClick={() => void stayInApp(qc)}>
+                Sign out
+              </Button>
+            </div>
+          ) : null}
         </div>
       </main>
     );
