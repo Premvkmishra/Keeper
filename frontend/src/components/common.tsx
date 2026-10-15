@@ -320,14 +320,14 @@ export function FieldError({ id, msg }: { id: string; msg?: string }) {
 }
 
 export function ErrorSummary({ errors }: { errors: Record<string, string | undefined> }) {
-  const list = Object.values(errors).filter(Boolean) as string[];
-  if (list.length === 0) return null;
+  const entries = Object.entries(errors).filter(([, v]) => Boolean(v)) as [string, string][];
+  if (entries.length === 0) return null;
   return (
     <div role="alert" className="rounded-md border border-danger/40 bg-danger-bg p-3 text-danger">
-      <p className="font-bold">Please fix {list.length === 1 ? "this" : "these"}:</p>
+      <p className="font-bold">Please fix {entries.length === 1 ? "this" : "these"}:</p>
       <ul className="ml-5 list-disc">
-        {list.map((m) => (
-          <li key={m}>{m}</li>
+        {entries.map(([k, m], index) => (
+          <li key={`${k}-${index}-${m}`}>{m}</li>
         ))}
       </ul>
     </div>

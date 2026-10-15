@@ -88,8 +88,8 @@ def processing_configuration_blockers() -> List[str]:
         blockers.append("KEEPER_MCP_INBOUND_SECRET is missing")
     if not settings.MOCK_BANK_AUTH_TOKEN:
         blockers.append("MOCK_BANK_AUTH_TOKEN is missing")
-    if not settings.SUPABASE_JWT_SECRET:
-        blockers.append("SUPABASE_JWT_SECRET is missing")
+    if not settings.SUPABASE_JWT_SECRET and not settings.AUTH_JWT_SECRET:
+        blockers.append("JWT_SECRET is missing")
     if not settings.GEMINI_API_KEY:
         blockers.append("GEMINI_API_KEY is missing")
     return blockers

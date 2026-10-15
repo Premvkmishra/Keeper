@@ -393,7 +393,7 @@ export interface UpdateBillBody {
 }
 
 export interface PayBillBody {
-  idempotency_key: string;
+  idempotency_key?: string;
 }
 
 export interface ApproveBody {
@@ -448,3 +448,29 @@ export interface DemoRunResult {
   next_action: "none" | "approve_in_queue";
   approval_id?: string | null;
 }
+
+export interface AuthUser {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: MemberRole;
+  household: Household;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface LoginBody {
+  email: string;
+  password: string;
+}
+
+export interface RegisterBody {
+  email: string;
+  password: string;
+  confirm_password: string;
+  display_name: string;
+}
+

@@ -71,6 +71,7 @@ class WitnessService:
             checked_at=checked_at,
         )
         db.add(report)
+        db.flush()
         attempt.latest_witness_report_id = report_id
 
         if reconciling and rep["verdict"] == "confirmed_paid" and rep["matched_transactions"]:

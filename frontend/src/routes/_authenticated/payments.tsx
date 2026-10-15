@@ -144,10 +144,13 @@ function PaymentSheet({ id, onClose }: { id: string | null; onClose: () => void 
                   variant="outline"
                   disabled={verify.isPending}
                   onClick={() =>
-                    verify.mutate(q.data.attempt.id, {
-                      onSuccess: () => toast.success("The Witness checked the bank ledger again."),
-                      onError: (e) => toast.error(friendlyErrorMessage(e)),
-                    })
+                    verify.mutate(
+                      { attempt_id: q.data.attempt.id },
+                      {
+                        onSuccess: () => toast.success("The Witness checked the bank ledger again."),
+                        onError: (e) => toast.error(friendlyErrorMessage(e)),
+                      },
+                    )
                   }
                 >
                   <SubmitLabel

@@ -24,6 +24,7 @@ import type {
   UpdateBillerBody,
   UpdateBillBody,
   UpdatePolicyBody,
+  WitnessVerdict,
 } from "./types";
 
 export const PAGE_SIZE = 20;
@@ -95,7 +96,12 @@ export function useBill(billId: string) {
 export function useCreateBill() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: CreateBillBody) => api.createBill(body),
+    mutationFn: (vars: CreateBillBody | { body: CreateBillBody; file?: File | null }) => {
+      if ("body" in vars) {
+        return api.createBill(vars.body, vars.file);
+      }
+      return api.createBill(vars);
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["bills"] });
       void qc.invalidateQueries({ queryKey: qk.dashboard });
@@ -106,13 +112,17 @@ export function useCreateBill() {
 export function useUpdateBill(billId?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: UpdateBillBody }) =>
-      api.updateBill(id, body),
+    mutationFn: (args: { id?: string; body: UpdateBillBody } | UpdateBillBody) => {
+      const targetId = "id" in args && args.id ? args.id : billId;
+      const targetBody = "body" in args && args.body ? args.body : (args as UpdateBillBody);
+      if (!targetId) throw new Error("Missing bill id for update");
+      return api.updateBill(targetId, targetBody);
+    },
     onSuccess: (_, vars) => {
+      const targetId = "id" in vars && vars.id ? vars.id : billId;
       void qc.invalidateQueries({ queryKey: ["bills"] });
-      void qc.invalidateQueries({ queryKey: qk.bill(vars.id) });
-      if (billId) {
-        void qc.invalidateQueries({ queryKey: qk.bill(billId) });
+      if (targetId) {
+        void qc.invalidateQueries({ queryKey: qk.bill(targetId) });
       }
       void qc.invalidateQueries({ queryKey: qk.dashboard });
     },
@@ -134,7 +144,7 @@ export function useCancelBill(billId: string) {
 export function usePayBill(billId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: PayBillBody) => api.payBill(billId, body),
+    mutationFn: (body?: PayBillBody | string) => api.payBill(billId, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["bills"] });
       void qc.invalidateQueries({ queryKey: qk.bill(billId) });
@@ -300,22 +310,32 @@ export function useUpdatePolicy() {
   });
 }
 
-export function usePayments(params?: { limit?: number; offset?: number }) {
+export function usePayments(params?: {
+  status?: AttemptStatus;
+  bill_id?: string;
+  limit?: number;
+  offset?: number;
+}) {
   return useQuery({
     queryKey: qk.payments(params),
     queryFn: () => api.getPayments({ limit: PAGE_SIZE, ...params }),
   });
 }
 
-export function usePayment(attemptId: string) {
+export function usePayment(attemptId?: string | null) {
   return useQuery({
-    queryKey: qk.payment(attemptId),
-    queryFn: () => api.getPayment(attemptId),
+    queryKey: qk.payment(attemptId ?? ""),
+    queryFn: () => api.getPayment(attemptId!),
     enabled: Boolean(attemptId),
   });
 }
 
-export function useWitnessReports(params?: { limit?: number; offset?: number }) {
+export function useWitnessReports(params?: {
+  verdict?: WitnessVerdict;
+  bill_id?: string;
+  limit?: number;
+  offset?: number;
+}) {
   return useQuery({
     queryKey: qk.witnessReports(params),
     queryFn: () => api.getWitnessReports({ limit: PAGE_SIZE, ...params }),
@@ -336,7 +356,7 @@ export function useWitnessReport(
 export function useWitnessVerify() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { attempt_id?: string; bill_id?: string }) =>
+    mutationFn: (body: string | { attempt_id?: string; bill_id?: string }) =>
       api.verifyWitness(body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["witness-reports"] });

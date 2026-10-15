@@ -241,12 +241,12 @@ export function formatDateTime(ts: string | null | undefined): string {
   }
 }
 
-export function relativeExpiry(ts: string): string {
+export function relativeExpiry(ts: string, baseTime?: Date | number | string): string {
   if (!ts) return "—";
   try {
     const expiryTime = new Date(ts).getTime();
     if (Number.isNaN(expiryTime)) return ts;
-    const now = Date.now();
+    const now = baseTime ? new Date(baseTime).getTime() : Date.now();
     const diffMs = expiryTime - now;
     const isPast = diffMs < 0;
     const absDiffSec = Math.floor(Math.abs(diffMs) / 1000);

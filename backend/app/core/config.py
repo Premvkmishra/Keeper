@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Mock Bank
     MOCK_BANK_BASE_URL: str = "http://127.0.0.1:9000"
     MOCK_BANK_DATABASE_PATH: str = "backend/mock_bank/bank.sqlite"
-    MOCK_BANK_AUTH_TOKEN: Optional[str] = None
+    MOCK_BANK_AUTH_TOKEN: Optional[str] = "keeper-mock-bank-dev-token"
 
     # ArmorIQ configuration
     ARMORIQ_ENFORCEMENT: str = "required"  # "required" | "optional" | "disabled"

@@ -1,4 +1,5 @@
 from .models import (
+    User,
     Household,
     HouseholdMember,
     HouseholdPolicy,
@@ -13,6 +14,7 @@ from .models import (
 )
 
 __all__ = [
+    "User",
     "Household",
     "HouseholdMember",
     "HouseholdPolicy",

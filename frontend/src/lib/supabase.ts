@@ -11,9 +11,32 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
+export function getAuthToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return (
+    sessionStorage.getItem("keeper_token") ||
+    localStorage.getItem("keeper_token") ||
+    localStorage.getItem("keeper_dev_token") ||
+    null
+  );
+}
+
+export function setAuthToken(token: string): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem("keeper_token", token);
+  localStorage.setItem("keeper_token", token);
+  localStorage.removeItem("keeper_dev_token");
+}
+
+export function clearAuthToken(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem("keeper_token");
+  localStorage.removeItem("keeper_token");
+  localStorage.removeItem("keeper_dev_token");
+}
+
 export function isDevAuth(): boolean {
-  if (typeof window === "undefined") return false;
-  return Boolean(localStorage.getItem("keeper_dev_token"));
+  return Boolean(getAuthToken());
 }
 
 export function isAuthConfigured(): boolean {

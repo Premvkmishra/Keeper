@@ -9,8 +9,10 @@ from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
+from datetime import datetime, timedelta, timezone
+from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.models.models import HouseholdMember, Household
+from backend.app.models.models import HouseholdMember, Household, HouseholdPolicy, User
 from backend.app.schemas.schemas import Permissions, MemberRole
 
 logger = logging.getLogger(__name__)
@@ -45,18 +47,55 @@ class AuthenticatedUser:
             can_manage_policy=is_owner,
         )
 
-def decode_token(token: str) -> Dict[str, Any]:
-    """Verify a Supabase JWT via JWKS or accept the local demo admin JWT."""
-    try:
-        return jwt.decode(
-            token,
-            settings.DEMO_ADMIN_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except jwt.PyJWTError:
-        pass
+def create_access_token(
+    user_id: str,
+    email: str,
+    role: str = "owner",
+    household_id: Optional[str] = None,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    secret = getattr(settings, "AUTH_JWT_SECRET", None) or settings.DEMO_ADMIN_JWT_SECRET
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(hours=settings.AUTH_TOKEN_EXPIRE_HOURS)
+    )
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "role": role,
+        "exp": expire,
+    }
+    if household_id:
+        payload["household_id"] = str(household_id)
+    return jwt.encode(payload, secret, algorithm="HS256")
 
+def decode_token(token: str) -> Dict[str, Any]:
+    """Verify application JWT or Supabase JWT."""
+    # 1. Try application auth secret
+    auth_secret = getattr(settings, "AUTH_JWT_SECRET", None)
+    if auth_secret:
+        try:
+            return jwt.decode(
+                token,
+                auth_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        except jwt.PyJWTError:
+            pass
+
+    # 2. Try demo admin secret
+    if settings.DEMO_ADMIN_JWT_SECRET:
+        try:
+            return jwt.decode(
+                token,
+                settings.DEMO_ADMIN_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        except jwt.PyJWTError:
+            pass
+
+    # 3. Supabase token verification - fail closed if SUPABASE_JWT_SECRET is not configured
     if not settings.SUPABASE_JWT_SECRET:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -65,6 +104,7 @@ def decode_token(token: str) -> Dict[str, Any]:
                 "message": "SUPABASE_JWT_SECRET is not configured; authentication is unavailable.",
             },
         )
+
     try:
         return jwt.decode(
             token,
@@ -73,9 +113,11 @@ def decode_token(token: str) -> Dict[str, Any]:
             options={"verify_aud": False},
         )
     except jwt.PyJWTError:
+        pass
+
+    # Fallback to Supabase JWKS if configured
+    if settings.SUPABASE_URL:
         try:
-            if not settings.SUPABASE_URL:
-                raise ValueError("missing supabase url")
             jwks_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
             jwks_client = PyJWKClient(jwks_url)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
@@ -85,11 +127,13 @@ def decode_token(token: str) -> Dict[str, Any]:
                 algorithms=["ES256"],
                 options={"verify_aud": False},
             )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "unauthenticated", "message": f"Invalid token: {str(e)}"},
-            )
+        except Exception:
+            pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "unauthenticated", "message": "Invalid or expired authentication token."},
+    )
 
 def get_current_user(
     authorization: Optional[str] = Header(None),
@@ -104,7 +148,7 @@ def get_current_user(
     token = authorization.split(" ", 1)[1].strip()
     payload = decode_token(token)
 
-    # Supabase JWT contains 'sub' as user_id and 'email'
+    # Supabase JWT or app JWT contains 'sub' as user_id and 'email'
     user_id = payload.get("sub") or payload.get("user_id")
     email = payload.get("email") or "unknown@user.com"
 
@@ -114,28 +158,59 @@ def get_current_user(
             detail={"code": "unauthenticated", "message": "Token missing user identifier."},
         )
 
-    # Lookup household membership
+    # 1. Lookup household membership by user_id
     member = (
         db.query(HouseholdMember)
         .filter(HouseholdMember.user_id == str(user_id))
         .first()
     )
 
-    if not member:
-        # Check by email as a fallback for initial invites or demo accounts
+    # 2. Check by email fallback
+    if not member and email:
         member = (
             db.query(HouseholdMember)
             .filter(HouseholdMember.email == email)
             .first()
         )
         if member:
-            # Associate this user_id with the existing member row
             member.user_id = str(user_id)
             db.commit()
             db.refresh(member)
 
+    # 3. If User record exists but member doesn't, ensure household and membership
     if not member:
-        # User is authenticated in Supabase but not assigned to any household yet
+        user_record = db.query(User).filter(User.id == str(user_id)).first()
+        if not user_record and email:
+            user_record = db.query(User).filter(User.email == email).first()
+
+        if user_record:
+            new_household = Household(
+                name=f"{user_record.display_name}'s Household",
+                currency="INR",
+            )
+            db.add(new_household)
+            db.flush()
+            new_policy = HouseholdPolicy(
+                household_id=new_household.id,
+                auto_pay_limit=10000.00,
+                currency="INR",
+                approval_ttl_minutes=1440,
+                version=1,
+                updated_by_name=user_record.display_name,
+            )
+            db.add(new_policy)
+            member = HouseholdMember(
+                household_id=new_household.id,
+                user_id=str(user_record.id),
+                email=user_record.email,
+                display_name=user_record.display_name,
+                role="owner",
+            )
+            db.add(member)
+            db.commit()
+            db.refresh(member)
+
+    if not member:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

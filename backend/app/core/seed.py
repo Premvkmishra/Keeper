@@ -9,15 +9,18 @@ from backend.app.models.models import (
     HouseholdMember,
     HouseholdPolicy,
     TrustedBiller,
+    User,
 )
+from backend.app.security.passwords import hash_password
 
 logger = logging.getLogger(__name__)
 
 DEMO_HOUSEHOLD_ID = "00000000-0000-0000-0000-000000000001"
-DEMO_OWNER_USER_ID = "u1"
+DEMO_OWNER_USER_ID = "00000000-0000-0000-0000-000000000002"
 DEMO_OWNER_EMAIL = "u1@test.com"
-DEMO_ADMIN_USER_ID = "admin"
+DEMO_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000003"
 DEMO_ADMIN_EMAIL = "admin@keeper.local"
+
 
 
 def seed_demo_household(db: Session) -> None:
@@ -42,6 +45,16 @@ def seed_demo_household(db: Session) -> None:
             )
         )
 
+    if not db.query(User).filter(User.email == DEMO_OWNER_EMAIL).first():
+        db.add(
+            User(
+                id=DEMO_OWNER_USER_ID,
+                email=DEMO_OWNER_EMAIL,
+                password_hash=hash_password("password123"),
+                display_name="Demo Owner",
+            )
+        )
+
     member = (
         db.query(HouseholdMember)
         .filter(HouseholdMember.household_id == hid, HouseholdMember.email == DEMO_OWNER_EMAIL)
@@ -55,6 +68,16 @@ def seed_demo_household(db: Session) -> None:
                 email=DEMO_OWNER_EMAIL,
                 display_name="Demo Owner",
                 role="owner",
+            )
+        )
+
+    if not db.query(User).filter(User.email == DEMO_ADMIN_EMAIL).first():
+        db.add(
+            User(
+                id=DEMO_ADMIN_USER_ID,
+                email=DEMO_ADMIN_EMAIL,
+                password_hash=hash_password(settings.DEMO_ADMIN_PASSWORD),
+                display_name="System Admin",
             )
         )
 

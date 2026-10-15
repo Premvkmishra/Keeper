@@ -5,12 +5,15 @@ const MeContext = createContext<Me | null>(null);
 
 export function MeProvider({
   value,
+  me,
   children,
 }: {
-  value: Me;
+  value?: Me;
+  me?: Me;
   children: ReactNode;
 }) {
-  return <MeContext.Provider value={value}>{children}</MeContext.Provider>;
+  const current = value ?? me ?? null;
+  return <MeContext.Provider value={current}>{children}</MeContext.Provider>;
 }
 
 export function useMe(): Me {
@@ -19,6 +22,10 @@ export function useMe(): Me {
     throw new Error("useMe must be used within a MeProvider");
   }
   return ctx;
+}
+
+export function useOptionalMe(): Me | null {
+  return useContext(MeContext);
 }
 
 export function usePermissions(): Permissions {

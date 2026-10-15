@@ -5,13 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FieldError, SubmitLabel } from "@/components/common";
 import { DemoBadge } from "@/components/layout/AppShell";
-import {
-  DEV_TOKEN,
-  getAuthClient,
-  isAuthConfigured,
-  isDevAuth,
-  isSupabaseConfigured,
-} from "@/lib/supabase";
+import { api, ApiError, friendlyErrorMessage } from "@/lib/api";
+import { getAuthToken, setAuthToken } from "@/lib/supabase";
 
 export const Route = createFileRoute("/login")({
   ssr: false,
@@ -30,53 +25,54 @@ export const Route = createFileRoute("/login")({
     ],
   }),
   beforeLoad: async () => {
-    if (isDevAuth()) throw redirect({ to: "/" });
-    if (!isSupabaseConfigured()) return;
-    const { data } = await getAuthClient().auth.getSession();
-    if (data.session) throw redirect({ to: "/" });
+    if (getAuthToken()) throw redirect({ to: "/" });
   },
   component: LoginPage,
 });
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function LoginPage() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  if (!isSupabaseConfigured()) {
-    return (
-      <Shell>
-        <div
-          role="alert"
-          className="rounded-lg border border-warning/40 bg-warning-bg p-4 text-warning"
-        >
-          <p className="font-bold">Supabase Cloud sign-in is not configured.</p>
-          <p className="mt-1">
-            To connect live Supabase, set <code>VITE_SUPABASE_ANON_KEY</code> in{" "}
-            <code>frontend/.env</code>.
-          </p>
-        </div>
-        <div className="mt-6 border-t pt-6">
-          <p className="mb-3 text-sm text-muted-foreground">
-            Or test locally right now with the pre-seeded owner account:
-          </p>
-          <Button
-            type="button"
-            className="w-full h-12 text-base font-bold"
-            onClick={async () => {
-              localStorage.setItem("keeper_dev_token", DEV_TOKEN);
-              await navigate({ to: "/", replace: true });
-            }}
-          >
-            Sign in with Local Dev Account (u1@test.com)
-          </Button>
-        </div>
-      </Shell>
-    );
+  function validate(): boolean {
+    const errs: Record<string, string> = {};
+    const trimmedEmail = email.trim();
+
+    if (!trimmedEmail) {
+      errs.email = "Please enter your email address.";
+    } else if (!EMAIL_REGEX.test(trimmedEmail)) {
+      errs.email = "Please enter a valid email address.";
+    }
+
+    if (!password) {
+      errs.password = "Please enter your password.";
+    } else if (password.length < 8) {
+      errs.password = "Password must be at least 8 characters.";
+    }
+
+    if (mode === "signup") {
+      if (!displayName.trim()) {
+        errs.displayName = "Please enter your display name.";
+      }
+      if (!confirmPassword) {
+        errs.confirmPassword = "Please confirm your password.";
+      } else if (password !== confirmPassword) {
+        errs.confirmPassword = "Passwords do not match.";
+      }
+    }
+
+    setFieldErrors(errs);
+    return Object.keys(errs).length === 0;
   }
 
   async function submit(e: FormEvent) {
@@ -84,29 +80,44 @@ function LoginPage() {
     if (pending) return;
     setError(null);
     setNotice(null);
-    if (!email.trim()) return setError("Please enter your email.");
-    if (mode === "signup" && password.length < 8)
-      return setError("Your password needs at least 8 characters.");
-    if (!password) return setError("Please enter your password.");
+
+    if (!validate()) return;
+
     setPending(true);
     try {
-      const auth = getAuthClient().auth;
       if (mode === "signin") {
-        const { error } = await auth.signInWithPassword({ email: email.trim(), password });
-        if (error) throw error;
+        const res = await api.login({
+          email: email.trim().toLowerCase(),
+          password,
+        });
+        setAuthToken(res.token);
         await navigate({ to: "/", replace: true });
       } else {
-        const { data, error } = await auth.signUp({
-          email: email.trim(),
+        const res = await api.register({
+          display_name: displayName.trim(),
+          email: email.trim().toLowerCase(),
           password,
-          options: { emailRedirectTo: window.location.origin },
+          confirm_password: confirmPassword,
         });
-        if (error) throw error;
-        if (data.session) await navigate({ to: "/", replace: true });
-        else setNotice("Account created. Please check your email to confirm, then sign in.");
+        setAuthToken(res.token);
+        await navigate({ to: "/", replace: true });
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "We couldn't sign you in. Please try again.");
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        if (err.fieldErrors) {
+          setFieldErrors((prev) => ({ ...prev, ...err.fieldErrors }));
+        }
+        setError(err.message);
+      } else if (
+        err instanceof TypeError ||
+        (err instanceof Error && err.message.includes("Failed to fetch"))
+      ) {
+        setError(
+          "Unable to connect to Keeper server. Please ensure the backend is running at http://localhost:8000.",
+        );
+      } else {
+        setError(friendlyErrorMessage(err));
+      }
     } finally {
       setPending(false);
     }
@@ -114,114 +125,172 @@ function LoginPage() {
 
   return (
     <Shell>
-      <h1 className="mb-1">{mode === "signin" ? "Sign in to Keeper" : "Create your account"}</h1>
+      <h1 className="mb-1 text-2xl font-bold text-foreground">
+        {mode === "signin" ? "Sign in to Keeper" : "Create your account"}
+      </h1>
       <p className="mb-6 text-muted-foreground">Keeper helps you pay bills safely.</p>
+
       <form onSubmit={submit} noValidate className="space-y-4">
+        {mode === "signup" && (
+          <div>
+            <Label htmlFor="displayName" className="text-sm font-semibold">
+              Full Name / Display Name
+            </Label>
+            <Input
+              id="displayName"
+              type="text"
+              autoComplete="name"
+              placeholder="e.g. John Doe"
+              value={displayName}
+              onChange={(e) => {
+                setDisplayName(e.target.value);
+                setFieldErrors((prev) => ({ ...prev, displayName: "" }));
+              }}
+              className="mt-1 h-11 text-base"
+              aria-describedby={fieldErrors.displayName ? "displayName-error" : undefined}
+            />
+            <FieldError id="displayName-error" msg={fieldErrors.displayName} />
+          </div>
+        )}
+
         <div>
-          <Label htmlFor="email" className="text-base font-bold">
-            Email
+          <Label htmlFor="email" className="text-sm font-semibold">
+            Email address
           </Label>
           <Input
             id="email"
             type="email"
             autoComplete="email"
+            placeholder="you@example.com"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 h-12 text-base"
-            aria-describedby={error ? "login-error" : undefined}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, email: "" }));
+            }}
+            className="mt-1 h-11 text-base"
+            aria-describedby={fieldErrors.email ? "email-error" : undefined}
           />
+          <FieldError id="email-error" msg={fieldErrors.email} />
         </div>
+
         <div>
-          <Label htmlFor="password" className="text-base font-bold">
+          <Label htmlFor="password" className="text-sm font-semibold">
             Password
           </Label>
           <Input
             id="password"
             type="password"
             autoComplete={mode === "signin" ? "current-password" : "new-password"}
+            placeholder="••••••••"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 h-12 text-base"
-            aria-describedby={mode === "signup" ? "pw-hint" : undefined}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: "" }));
+            }}
+            className="mt-1 h-11 text-base"
+            aria-describedby={
+              fieldErrors.password
+                ? "password-error"
+                : mode === "signup"
+                  ? "pw-hint"
+                  : undefined
+            }
           />
           {mode === "signup" && (
-            <p id="pw-hint" className="mt-1 text-muted-foreground">
+            <p id="pw-hint" className="mt-1 text-xs text-muted-foreground">
               At least 8 characters.
             </p>
           )}
+          <FieldError id="password-error" msg={fieldErrors.password} />
         </div>
+
+        {mode === "signup" && (
+          <div>
+            <Label htmlFor="confirmPassword" className="text-sm font-semibold">
+              Confirm password
+            </Label>
+            <Input
+              id="confirmPassword"
+              type="password"
+              autoComplete="new-password"
+              placeholder="••••••••"
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                setFieldErrors((prev) => ({ ...prev, confirmPassword: "" }));
+              }}
+              className="mt-1 h-11 text-base"
+              aria-describedby={
+                fieldErrors.confirmPassword ? "confirmPassword-error" : undefined
+              }
+            />
+            <FieldError id="confirmPassword-error" msg={fieldErrors.confirmPassword} />
+          </div>
+        )}
+
         <div aria-live="polite">
-          <FieldError id="login-error" msg={error ?? undefined} />
+          {error && <FieldError id="login-error" msg={error} />}
           {notice && (
-            <p className="rounded-md bg-success-bg p-3 font-bold text-success">{notice}</p>
+            <p className="rounded-md bg-success-bg p-3 font-semibold text-success">{notice}</p>
           )}
         </div>
-        <Button type="submit" className="w-full" disabled={pending}>
+
+        <Button type="submit" className="w-full h-11 text-base font-semibold" disabled={pending}>
           <SubmitLabel
             pending={pending}
             idle={mode === "signin" ? "Sign in" : "Create account"}
-            busy={mode === "signin" ? "Signing in…" : "Creating…"}
+            busy={mode === "signin" ? "Signing in…" : "Creating account…"}
           />
         </Button>
       </form>
-      <Button
-        variant="link"
-        className="mt-4 px-0"
-        onClick={() => {
-          setMode(mode === "signin" ? "signup" : "signin");
-          setError(null);
-          setNotice(null);
-        }}
-      >
-        {mode === "signin" ? "Create account" : "I already have an account — sign in"}
-      </Button>
-      <div className="mt-6 border-t pt-4 space-y-3">
+
+      <div className="mt-4 text-center">
+        <Button
+          variant="link"
+          className="px-0 text-sm font-medium"
+          onClick={() => {
+            setMode(mode === "signin" ? "signup" : "signin");
+            setError(null);
+            setFieldErrors({});
+            setNotice(null);
+          }}
+        >
+          {mode === "signin"
+            ? "Don't have an account? Create one"
+            : "Already have an account? Sign in"}
+        </Button>
+      </div>
+
+      <div className="mt-6 border-t pt-4">
         <p className="mb-2 text-xs text-muted-foreground text-center">
-          Local Development Shortcut:
+          Quick Demo Credentials:
         </p>
         <Button
           type="button"
           variant="outline"
-          className="w-full h-11 text-sm font-semibold"
+          className="w-full h-10 text-xs font-medium"
+          disabled={pending}
           onClick={async () => {
-            localStorage.setItem("keeper_dev_token", DEV_TOKEN);
-            await navigate({ to: "/", replace: true });
-          }}
-        >
-          Sign in with Local Dev Account (u1@test.com)
-        </Button>
-        <Button
-          type="button"
-          variant="default"
-          className="w-full h-11 text-sm font-semibold"
-          onClick={async () => {
-            setPending(true);
+            setEmail("admin@keeper.local");
+            setPassword("admin");
             setError(null);
+            setFieldErrors({});
+            setPending(true);
             try {
-              const response = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"}/api/v1/auth/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username: "admin", password: "admin" }),
+              const res = await api.login({
+                email: "admin@keeper.local",
+                password: "admin",
               });
-
-              const json = (await response.json().catch(() => null)) as
-                | { token?: string; error?: { message?: string } }
-                | null;
-
-              if (!response.ok || !json?.token) {
-                throw new Error(json?.error?.message ?? "Admin login failed.");
-              }
-
-              localStorage.setItem("keeper_dev_token", json.token);
+              setAuthToken(res.token);
               await navigate({ to: "/", replace: true });
             } catch (err) {
-              setError(err instanceof Error ? err.message : "Admin login failed.");
+              setError(friendlyErrorMessage(err));
             } finally {
               setPending(false);
             }
           }}
         >
-          Sign in as admin (admin / admin)
+          Sign in as Demo Admin (admin@keeper.local / admin)
         </Button>
       </div>
     </Shell>
@@ -235,8 +304,10 @@ function Shell({ children }: { children: ReactNode }) {
         <span className="text-4xl font-bold text-primary">Keeper</span>
         <DemoBadge />
       </div>
-      <div className="w-full max-w-md rounded-lg border bg-card p-6">{children}</div>
-      <p className="mt-6 text-muted-foreground">Keeper never moves real money in this demo.</p>
+      <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-sm">{children}</div>
+      <p className="mt-6 text-sm text-muted-foreground">
+        Keeper never moves real money in this simulated environment.
+      </p>
     </main>
   );
 }
