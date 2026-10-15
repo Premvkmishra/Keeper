@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start mock bank (9000), Keeper API (8000), and frontend (8080) together.
+# Start Keeper API (8000) and frontend (8080) together.
 # Usage (from this folder):
 #   ./start.sh
 #   bash start.sh
@@ -20,7 +20,6 @@ BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 API_HOST="127.0.0.1"
 API_PORT="8000"
-BANK_PORT="9000"
 FE_HOST="127.0.0.1"
 FE_PORT="8080"
 
@@ -78,13 +77,6 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo "Starting mock bank on http://127.0.0.1:${BANK_PORT}"
-(
-  cd "$BACKEND"
-  exec "$PYTHON" -m uvicorn mock_bank.main:app --host "$API_HOST" --port "$BANK_PORT"
-) &
-PIDS+=($!)
-
 echo "Starting Keeper API on http://${API_HOST}:${API_PORT}"
 (
   cd "$BACKEND"
@@ -109,7 +101,7 @@ echo
 echo "Keeper is running:"
 echo "  Frontend   http://localhost:${FE_PORT}"
 echo "  API        http://${API_HOST}:${API_PORT}"
-echo "  Mock bank  http://127.0.0.1:${BANK_PORT}"
+echo "  Mock bank  embedded at http://${API_HOST}:${API_PORT}/_internal/mock-bank"
 echo
 echo "Press Ctrl+C to stop all services."
 

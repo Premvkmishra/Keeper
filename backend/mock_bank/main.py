@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from dotenv import dotenv_values
 
@@ -18,7 +18,7 @@ MOCK_BANK_AUTH_TOKEN = os.environ.get("MOCK_BANK_AUTH_TOKEN") or dotenv_values(
     Path(__file__).resolve().parents[1] / ".env"
 ).get("MOCK_BANK_AUTH_TOKEN")
 
-app = FastAPI(title="Keeper Mock Bank", version="1.0.0")
+router = APIRouter()
 
 def get_db_path() -> Path:
     p = Path(DB_PATH)
@@ -49,10 +49,6 @@ def init_bank_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_client_ref ON transactions(client_reference)")
         conn.commit()
 
-@app.on_event("startup")
-def startup_event():
-    init_bank_db()
-
 class PaymentRequest(BaseModel):
     client_reference: str = Field(..., min_length=1, max_length=128)
     amount: str = Field(..., pattern=r"^\d+(\.\d{2})?$")
@@ -81,7 +77,7 @@ def require_backend_authorization(authorization: Optional[str] = Header(None)) -
     if not expected or not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Backend authorization required.")
 
-@app.get("/health")
+@router.get("/health")
 def health():
     try:
         p = get_db_path()
@@ -91,9 +87,7 @@ def health():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database check failed: {str(e)}")
 
-from fastapi import FastAPI, HTTPException, status, Response
-
-@app.post(
+@router.post(
     "/bank/v1/payments",
     response_model=PaymentResponse,
     status_code=status.HTTP_201_CREATED,
@@ -174,7 +168,7 @@ def record_payment(req: PaymentRequest, response: Response = None):
             created_at=now_iso,
         )
 
-@app.get(
+@router.get(
     "/bank/v1/payments/{client_reference}",
     response_model=PaymentResponse,
     dependencies=[Depends(require_backend_authorization)],

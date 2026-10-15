@@ -1,26 +1,6 @@
 version: "3.8"
 
 services:
-  mock-bank:
-    build:
-      context: .
-      dockerfile: Dockerfile.mockbank
-    container_name: keeper-mock-bank
-    ports:
-      - "9000:9000"
-    environment:
-      - MOCK_BANK_DATABASE_PATH=/data/bank_ledger.db
-      - MOCK_BANK_AUTH_TOKEN=${MOCK_BANK_AUTH_TOKEN}
-    volumes:
-      - mock_bank_ledger_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 3s
-    restart: unless-stopped
-
   backend:
     build:
       context: .
@@ -31,15 +11,11 @@ services:
     env_file:
       - .env
     environment:
-      - MOCK_BANK_BASE_URL=http://mock-bank:9000
       - MOCK_BANK_DATABASE_PATH=/data/bank_ledger.db
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
     volumes:
-      - mock_bank_ledger_data:/data:ro  # Read-only access for independent Witness verification
-    depends_on:
-      mock-bank:
-        condition: service_healthy
+      - mock_bank_ledger_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

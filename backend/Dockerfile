@@ -13,6 +13,7 @@ COPY __init__.py .
 COPY app/ app/
 COPY mock_bank/ mock_bank/
 COPY witness/ witness/
+COPY render-start.sh .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
@@ -21,6 +22,6 @@ COPY armoriq/ armoriq/
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -f "http://localhost:${PORT:-8000}/health" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "render-start.sh"]

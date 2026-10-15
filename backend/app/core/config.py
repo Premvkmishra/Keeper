@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = "https://amzllkpjwzqjrvudqxie.supabase.co"
     SUPABASE_JWT_SECRET: Optional[str] = None
     # Mock Bank
-    MOCK_BANK_BASE_URL: str = "http://127.0.0.1:9000"
     MOCK_BANK_DATABASE_PATH: str = "backend/mock_bank/bank.sqlite"
     MOCK_BANK_AUTH_TOKEN: Optional[str] = None
 
@@ -54,5 +53,9 @@ class Settings(BaseSettings):
     @property
     def armoriq_required(self) -> bool:
         return self.ARMORIQ_ENFORCEMENT.lower() not in ("disabled", "optional")
+
+    @property
+    def mock_bank_base_url(self) -> str:
+        return f"http://127.0.0.1:{self.APP_PORT}/_internal/mock-bank"
 
 settings = Settings()

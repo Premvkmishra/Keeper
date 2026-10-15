@@ -1,4 +1,4 @@
-# Start mock bank (9000), Keeper API (8000), and frontend (8080) together.
+# Start Keeper API (8000) and frontend (8080) together.
 # Usage:  .\start.ps1
 # Stop:   Ctrl+C
 $ErrorActionPreference = "Stop"
@@ -29,9 +29,6 @@ function Stop-Keeper {
 }
 
 try {
-    Write-Host "Starting mock bank on http://127.0.0.1:9000"
-    $jobs += Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "mock_bank.main:app", "--host", "127.0.0.1", "--port", "9000") -WorkingDirectory $Backend -PassThru -NoNewWindow
-
     Write-Host "Starting Keeper API on http://127.0.0.1:8000"
     $jobs += Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $Backend -PassThru -NoNewWindow
 
@@ -48,7 +45,7 @@ try {
     Write-Host "Keeper is running:"
     Write-Host "  Frontend   http://localhost:8080"
     Write-Host "  API        http://127.0.0.1:8000"
-    Write-Host "  Mock bank  http://127.0.0.1:9000"
+    Write-Host "  Mock bank  embedded at http://127.0.0.1:8000/_internal/mock-bank"
     Write-Host ""
     Write-Host "Press Ctrl+C to stop all services."
 

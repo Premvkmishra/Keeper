@@ -6,7 +6,7 @@ from backend.app.services.witness_service import WitnessService
 from backend.witness.verifier import WitnessVerifier
 
 def test_mock_bank_health(mock_bank_client):
-    res = mock_bank_client.get("/health")
+    res = mock_bank_client.get("/_internal/mock-bank/health")
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
 
@@ -21,18 +21,18 @@ def test_mock_bank_payment_and_idempotency(mock_bank_client):
         "destination_ifsc": "HDFC0001234",
     }
     headers = {"Authorization": f"Bearer {settings.MOCK_BANK_AUTH_TOKEN}"}
-    unauthenticated = mock_bank_client.post("/bank/v1/payments", json=req_payload)
+    unauthenticated = mock_bank_client.post("/_internal/mock-bank/bank/v1/payments", json=req_payload)
     assert unauthenticated.status_code == 401
 
     # 1. First execution
-    res1 = mock_bank_client.post("/bank/v1/payments", json=req_payload, headers=headers)
+    res1 = mock_bank_client.post("/_internal/mock-bank/bank/v1/payments", json=req_payload, headers=headers)
     assert res1.status_code == 201
     data1 = res1.json()
     assert data1["status"] == "posted"
     assert "TXN-" in data1["bank_txn_id"]
 
     # 2. Duplicate idempotent call returns same bank_txn_id
-    res2 = mock_bank_client.post("/bank/v1/payments", json=req_payload, headers=headers)
+    res2 = mock_bank_client.post("/_internal/mock-bank/bank/v1/payments", json=req_payload, headers=headers)
     assert res2.status_code == 200
     data2 = res2.json()
     assert data2["bank_txn_id"] == data1["bank_txn_id"]
@@ -40,7 +40,7 @@ def test_mock_bank_payment_and_idempotency(mock_bank_client):
     # 3. Conflicting request with same client_reference but different amount
     conflict_payload = dict(req_payload)
     conflict_payload["amount"] = "5000.00"
-    res3 = mock_bank_client.post("/bank/v1/payments", json=conflict_payload, headers=headers)
+    res3 = mock_bank_client.post("/_internal/mock-bank/bank/v1/payments", json=conflict_payload, headers=headers)
     assert res3.status_code == 409
 
 def test_witness_verification(mock_bank_client):
@@ -69,7 +69,7 @@ def test_witness_verification(mock_bank_client):
 
     # Post payment
     mock_bank_client.post(
-        "/bank/v1/payments",
+        "/_internal/mock-bank/bank/v1/payments",
         json=req_payload,
         headers={"Authorization": f"Bearer {settings.MOCK_BANK_AUTH_TOKEN}"},
     )
@@ -141,7 +141,7 @@ def test_witness_reconciles_executing_attempts(mock_bank_client, db, seed_data):
     headers = {"Authorization": f"Bearer {token}"}
     paid_bill, posted_attempt = make_attempt("REF-RECONCILE-POSTED")
     bank_response = mock_bank_client.post(
-        "/bank/v1/payments",
+        "/_internal/mock-bank/bank/v1/payments",
         json={
             "client_reference": posted_attempt.client_reference,
             "amount": "2400.00",

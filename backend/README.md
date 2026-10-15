@@ -32,7 +32,7 @@ backend/
 │   ├── schemas/             # Typed Pydantic v2 schemas
 │   ├── services/            # Policy engine, payment execution, agent, witness
 │   └── integrations/        # ArmorIQ v2 Gateway (lifespan, proxy, token minting)
-├── mock_bank/               # Standalone simulated bank ledger (port 9000)
+├── mock_bank/               # Embedded simulated bank API and SQLite ledger
 ├── witness/                 # Independent read-only bank ledger verifier
 ├── armoriq/                 # MCP configuration (armoriq.yaml)
 ├── scripts/                 # SDK verification, registration, run scripts
@@ -98,8 +98,7 @@ Required variables:
 - `SUPABASE_DB_URL`: Supabase PostgreSQL connection string. Required outside isolated tests.
 - `SUPABASE_JWT_SECRET`: Supabase legacy JWT verifier and signing key for short-lived MCP household contexts. Use the Supabase JWT secret; never commit it.
 - `SUPABASE_URL`: Supabase project URL (`https://amzllkpjwzqjrvudqxie.supabase.co`).
-- `MOCK_BANK_BASE_URL`: Mock bank URL (default: `http://127.0.0.1:9000`).
-- `MOCK_BANK_AUTH_TOKEN`: Separate bearer secret shared between the backend and simulator.
+- `MOCK_BANK_AUTH_TOKEN`: Bearer secret protecting the backend's internal mock-bank routes.
 - `ARMORIQ_ENFORCEMENT=required` and `ARMORIQ_ROUTE=proxy`; all other modes block processing.
 - `ARMORIQ_API_KEY`: Server-side ArmorIQ API key.
 - `KEEPER_MCP_PUBLIC_URL`: Public HTTPS MCP URL ending in `/mcp`, registered in ArmorIQ.
@@ -122,13 +121,7 @@ The command applies five versioned, non-destructive migrations and inserts only 
 
 ## Running Locally
 
-### 1. Start Mock Bank (Port 9000)
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn mock_bank.main:app --port 9000
-```
-
-### 2. Start Keeper Backend (Port 8000)
+### Start Keeper Backend (Port 8000)
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
@@ -139,7 +132,9 @@ Verify health check:
 curl http://127.0.0.1:8000/health
 ```
 
-### 3. Running with Docker Compose
+The mock bank API is embedded in the Keeper backend; do not start another Uvicorn process for it.
+
+### Running with Docker Compose
 
 ```bash
 cd backend
@@ -148,17 +143,17 @@ docker-compose up --build
 
 ## Production hosting (Render)
 
-For one Render web service that runs the Keeper API and its simulated bank:
+For one Render web service, Keeper mounts the simulated bank inside the same FastAPI application. Only the Keeper API process and public port are needed; do not create or start a separate mock-bank service.
 
-- Root directory: `backend`
-- Build command: `pip install .`
-- Start command: `sh render-start.sh`
-- Health check path: `/health`
+- **Docker deployment**: set the root directory to `backend` and use `./Dockerfile`.
+- **Native Python deployment**: set the root directory to `backend`, build with `pip install .`, and start with `sh render-start.sh`.
+- Set the health check path to `/health`.
 - Attach a persistent disk mounted at `/var/data`; set `MOCK_BANK_DATABASE_PATH=/var/data/bank_ledger.db`.
-- Configure backend secrets in Render's environment settings, not in a committed `.env`. Set `MOCK_BANK_AUTH_TOKEN` to a strong random value, `ARMORIQ_ENFORCEMENT=required`, `ARMORIQ_ROUTE=proxy`, and `KEEPER_MCP_PUBLIC_URL` to the Render HTTPS URL ending in `/mcp`.
+- Configure backend secrets in Render's environment settings, not in a committed `.env`. Set `MOCK_BANK_AUTH_TOKEN` to a strong random value, `ARMORIQ_ENFORCEMENT=required`, `ARMORIQ_ROUTE=proxy`, and `KEEPER_MCP_PUBLIC_URL` to the Render HTTPS URL ending in `/mcp`. Any legacy `MOCK_BANK_BASE_URL` setting is ignored; bank traffic uses the backend's internal mock-bank routes.
+- Set `KEEPER_MCP_INBOUND_SECRET` to a strong random bearer token. Configure the ArmorIQ MCP registry to send that exact token as its Bearer token. If `ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN` is set, it must match the registry token too.
 - Set `CORS_ORIGINS` to the exact Railway frontend origin. Set the frontend build-time `VITE_API_BASE_URL` to the Render API origin and configure Supabase Auth's Site URL/redirect URLs for the Railway domain.
 
-The mock bank uses a local SQLite ledger shared with the Witness verifier, so it runs in the same service/filesystem as the API and uses persistent storage. Do not scale this single-instance SQLite setup horizontally. Supabase remains the PostgreSQL database; the local mock bank is a payment simulator only.
+The mock bank uses a local SQLite ledger shared with the Witness verifier. It runs in the same application process as the API and stores its ledger on the persistent disk. Do not scale this single-instance SQLite setup horizontally. Supabase remains the PostgreSQL database; the local mock bank is a payment simulator only.
 
 ---
 

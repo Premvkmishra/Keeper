@@ -13,6 +13,23 @@ def test_health(client):
     assert "mock_bank" in data
     assert "version" in data
 
+def test_mock_bank_is_available_inside_backend(client):
+    health = client.get("/_internal/mock-bank/health")
+    assert health.status_code == 200
+    assert health.json()["service"] == "mock_bank"
+
+    unauthorized = client.post(
+        "/_internal/mock-bank/bank/v1/payments",
+        json={
+            "client_reference": "test-reference",
+            "amount": "1.00",
+            "currency": "INR",
+            "destination_account_number": "123456789012",
+            "destination_ifsc": "HDFC0001234",
+        },
+    )
+    assert unauthorized.status_code == 401
+
 def test_bill_upload_persists_document_and_rejects_mismatched_signature(client, seed_data, db):
     from backend.app.models.models import BillDocument
 

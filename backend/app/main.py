@@ -3,7 +3,6 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any
-import httpx
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +23,7 @@ from backend.app.api.v1.agent import router as agent_router
 from backend.app.schemas.schemas import Health
 from backend.app.core.seed import seed_demo_household
 from backend.app.models.models import Bill, PaymentApproval, PaymentAttempt, SecurityEvent
+from backend.mock_bank.main import health as mock_bank_health, init_bank_db, router as mock_bank_router
 from sqlalchemy import inspect, text
 
 # Configure logging
@@ -36,6 +36,7 @@ logger = logging.getLogger("keeper")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Keeper Application...")
+    init_bank_db()
     if settings.APP_ENV.lower() not in ("testing", "test") and not settings.SUPABASE_URL:
         raise RuntimeError("SUPABASE_URL is required before the API can start.")
     if str(engine.url).startswith("sqlite"):
@@ -167,6 +168,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
 )
+app.include_router(mock_bank_router, prefix="/_internal/mock-bank", tags=["internal mock bank"])
 
 # Request ID & Error Envelope Handlers
 @app.middleware("http")
@@ -232,11 +234,8 @@ def health_check():
     # 2. Mock bank check
     mock_bank_status = "down"
     try:
-        bank_health_url = f"{settings.MOCK_BANK_BASE_URL.rstrip('/')}/health"
-        with httpx.Client(timeout=2.0) as client:
-            res = client.get(bank_health_url)
-            if res.status_code == 200 and res.json().get("status") == "ok":
-                mock_bank_status = "ok"
+        if mock_bank_health().get("status") == "ok":
+            mock_bank_status = "ok"
     except Exception:
         mock_bank_status = "down"
 

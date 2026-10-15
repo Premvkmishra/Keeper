@@ -15,7 +15,6 @@ os.environ["APP_ENV"] = "testing"
 os.environ["SUPABASE_JWT_SECRET"] = "keeper-test-only-secret-key-with-more-than-32-bytes"
 os.environ["KEEPER_MCP_INBOUND_SECRET"] = "keeper-test-mcp-secret"
 os.environ["ARMORIQ_ENFORCEMENT"] = "disabled"
-os.environ["MOCK_BANK_BASE_URL"] = "http://mock-bank.disabled.test"
 os.environ["MOCK_BANK_DATABASE_PATH"] = str((_repo_root / "backend" / "mock_bank" / "test_bank.sqlite").resolve())
 os.environ["MOCK_BANK_AUTH_TOKEN"] = "test-mock-bank-token"
 
@@ -33,7 +32,7 @@ from backend.app.models.models import (
     PaymentAttempt,
     SecurityEvent,
 )
-from backend.mock_bank.main import app as mock_bank_app, get_db_path as get_bank_db_path
+from backend.mock_bank.main import get_db_path as get_bank_db_path
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
@@ -83,7 +82,7 @@ def mock_bank_client():
         conn.execute("DELETE FROM transactions")
         conn.commit()
 
-    with TestClient(mock_bank_app) as c:
+    with TestClient(app) as c:
         yield c
 
     try:

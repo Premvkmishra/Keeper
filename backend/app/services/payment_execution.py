@@ -133,7 +133,7 @@ class PaymentExecutionService:
 
     def _lookup_bank(self, client_reference: str) -> Tuple[Optional[str], Optional[str]]:
         """Read-only lookup by client_reference. Returns (txn_id, error)."""
-        lookup_url = f"{settings.MOCK_BANK_BASE_URL.rstrip('/')}/bank/v1/payments/{client_reference}"
+        lookup_url = f"{settings.mock_bank_base_url}/bank/v1/payments/{client_reference}"
         try:
             with httpx.Client(timeout=2.0) as client:
                 res = client.get(
@@ -151,7 +151,7 @@ class PaymentExecutionService:
     def _call_mock_bank(self, payload: dict) -> Tuple[str, Optional[str], Optional[str]]:
         """Invokes the mock bank. Returns (outcome, txn_id, error) where outcome is
         'posted' | 'rejected' | 'ambiguous'."""
-        bank_url = f"{settings.MOCK_BANK_BASE_URL.rstrip('/')}/bank/v1/payments"
+        bank_url = f"{settings.mock_bank_base_url}/bank/v1/payments"
         try:
             with httpx.Client(timeout=2.0) as client:
                 res = client.post(
