@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     JSON,
     UniqueConstraint,
+    Uuid,
     text,
 )
 from sqlalchemy.orm import relationship
@@ -28,7 +29,7 @@ def utc_now() -> datetime:
 class Household(Base):
     __tablename__ = "households"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
     name = Column(String(255), nullable=False)
     currency = Column(String(3), nullable=False, default="INR")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -46,9 +47,9 @@ class Household(Base):
 class HouseholdMember(Base):
     __tablename__ = "household_members"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(String(36), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Uuid(as_uuid=False), nullable=False, index=True)
     email = Column(String(255), nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False)  # "owner", "caregiver", "viewer"
@@ -64,14 +65,14 @@ class HouseholdMember(Base):
 class HouseholdPolicy(Base):
     __tablename__ = "household_policies"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, unique=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, unique=True)
     auto_pay_limit = Column(Numeric(12, 2), nullable=False, default=10000.00)
     currency = Column(String(3), nullable=False, default="INR")
     approval_ttl_minutes = Column(Integer, nullable=False, default=1440)
     version = Column(Integer, nullable=False, default=1)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
-    updated_by_user_id = Column(String(36), nullable=True)
+    updated_by_user_id = Column(Uuid(as_uuid=False), nullable=True)
     updated_by_name = Column(String(255), nullable=True)
 
     household = relationship("Household", back_populates="policy")
@@ -79,8 +80,8 @@ class HouseholdPolicy(Base):
 class TrustedBiller(Base):
     __tablename__ = "trusted_billers"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     category = Column(String(20), nullable=False)
     consumer_reference = Column(String(64), nullable=True)
@@ -95,9 +96,9 @@ class TrustedBiller(Base):
 class ApprovedBeneficiary(Base):
     __tablename__ = "approved_beneficiaries"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    biller_id = Column(String(36), ForeignKey("trusted_billers.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    biller_id = Column(Uuid(as_uuid=False), ForeignKey("trusted_billers.id", ondelete="CASCADE"), nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
     account_number = Column(String(64), nullable=False)
     account_number_masked = Column(String(64), nullable=False)
@@ -111,9 +112,9 @@ class ApprovedBeneficiary(Base):
 class Bill(Base):
     __tablename__ = "bills"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    biller_id = Column(String(36), ForeignKey("trusted_billers.id", ondelete="SET NULL"), nullable=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    biller_id = Column(Uuid(as_uuid=False), ForeignKey("trusted_billers.id", ondelete="SET NULL"), nullable=True)
     title = Column(String(255), nullable=False)
     category = Column(String(20), nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
@@ -140,9 +141,9 @@ class Bill(Base):
 class BillDocument(Base):
     __tablename__ = "bill_documents"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    bill_id = Column(String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, unique=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    bill_id = Column(Uuid(as_uuid=False), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, unique=True)
     original_filename = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=False)
     sha256 = Column(String(64), nullable=False)
@@ -154,9 +155,9 @@ class BillDocument(Base):
 class PaymentApproval(Base):
     __tablename__ = "payment_approvals"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    bill_id = Column(String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    bill_id = Column(Uuid(as_uuid=False), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
     amount = Column(Numeric(12, 2), nullable=False)
     currency = Column(String(3), nullable=False, default="INR")
     destination_account_number = Column(String(64), nullable=False)
@@ -168,11 +169,11 @@ class PaymentApproval(Base):
     processing_message = Column(String(500), nullable=True)
     reason_code = Column(String(40), nullable=False, default="amount_exceeds_limit")
     requested_by_type = Column(String(20), nullable=False)  # "agent", "user"
-    requested_by_user_id = Column(String(36), nullable=True)
+    requested_by_user_id = Column(Uuid(as_uuid=False), nullable=True)
     requested_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     decided_at = Column(DateTime(timezone=True), nullable=True)
-    decided_by_user_id = Column(String(36), nullable=True)
+    decided_by_user_id = Column(Uuid(as_uuid=False), nullable=True)
     decided_by_name = Column(String(255), nullable=True)
     decision_note = Column(String(500), nullable=True)
     invalidated_reason = Column(String(40), nullable=True)
@@ -183,10 +184,10 @@ class PaymentApproval(Base):
 class PaymentAttempt(Base):
     __tablename__ = "payment_attempts"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    bill_id = Column(String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
-    approval_id = Column(String(36), ForeignKey("payment_approvals.id", ondelete="SET NULL"), nullable=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    bill_id = Column(Uuid(as_uuid=False), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
+    approval_id = Column(Uuid(as_uuid=False), ForeignKey("payment_approvals.id", ondelete="SET NULL"), nullable=True)
     idempotency_key = Column(String(128), nullable=False, index=True)
     client_reference = Column(String(128), nullable=False, unique=True, index=True)
     amount = Column(Numeric(12, 2), nullable=False)
@@ -195,7 +196,7 @@ class PaymentAttempt(Base):
     destination_account_number_masked = Column(String(64), nullable=False)
     destination_ifsc = Column(String(11), nullable=False)
     initiated_by_type = Column(String(20), nullable=False)  # "agent", "user"
-    initiated_by_user_id = Column(String(36), nullable=True)
+    initiated_by_user_id = Column(Uuid(as_uuid=False), nullable=True)
     decision = Column(String(20), nullable=False)  # "allow", "deny", "require_approval"
     status = Column(String(20), nullable=False)  # "requires_approval", "blocked", "executing", "succeeded", "failed"
     reason_code = Column(String(40), nullable=False)
@@ -203,7 +204,7 @@ class PaymentAttempt(Base):
     bank_reference = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
-    latest_witness_report_id = Column(String(36), nullable=True)
+    latest_witness_report_id = Column(Uuid(as_uuid=False), nullable=True)
 
     household = relationship("Household", back_populates="attempts")
     bill = relationship("Bill", back_populates="attempts")
@@ -212,10 +213,10 @@ class PaymentAttempt(Base):
 class SecurityEvent(Base):
     __tablename__ = "security_events"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    bill_id = Column(String(36), ForeignKey("bills.id", ondelete="SET NULL"), nullable=True)
-    attempt_id = Column(String(36), ForeignKey("payment_attempts.id", ondelete="SET NULL"), nullable=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    bill_id = Column(Uuid(as_uuid=False), ForeignKey("bills.id", ondelete="SET NULL"), nullable=True)
+    attempt_id = Column(Uuid(as_uuid=False), ForeignKey("payment_attempts.id", ondelete="SET NULL"), nullable=True)
     event_type = Column(String(50), nullable=False)
     severity = Column(String(20), nullable=False)  # "info", "warning", "critical"
     actor_type = Column(String(20), nullable=False)  # "user", "agent", "system", "witness"
@@ -228,10 +229,10 @@ class SecurityEvent(Base):
 class WitnessReportModel(Base):
     __tablename__ = "witness_reports"
 
-    id = Column(String(36), primary_key=True, default=gen_uuid_str)
-    household_id = Column(String(36), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
-    attempt_id = Column(String(36), ForeignKey("payment_attempts.id", ondelete="CASCADE"), nullable=False, index=True)
-    bill_id = Column(String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=gen_uuid_str)
+    household_id = Column(Uuid(as_uuid=False), ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_id = Column(Uuid(as_uuid=False), ForeignKey("payment_attempts.id", ondelete="CASCADE"), nullable=False, index=True)
+    bill_id = Column(Uuid(as_uuid=False), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
     expected_outcome = Column(String(30), nullable=False)
     verdict = Column(String(30), nullable=False)
     ledger_match_count = Column(Integer, nullable=False, default=0)

@@ -1,8 +1,19 @@
 import uuid
 import pytest
+from sqlalchemy import Uuid, select
+from sqlalchemy.dialects import postgresql
 from backend.tests.conftest import make_auth_token
 from backend.app.core.config import settings
+from backend.app.models.models import Household
 from backend.app.services.policy_engine import compute_details_hash
+
+def test_household_uuid_filter_uses_postgresql_uuid_bind():
+    statement = select(Household).where(Household.id == str(uuid.uuid4()))
+    compiled = statement.compile(dialect=postgresql.dialect())
+    bind_type = compiled.binds["id_1"].type
+
+    assert isinstance(bind_type, Uuid)
+    assert bind_type.as_uuid is False
 
 def test_health(client):
     res = client.get("/health")

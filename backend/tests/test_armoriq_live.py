@@ -32,7 +32,7 @@ def test_l2_mcp_registration_and_connectivity():
     client = ArmorIQClient(api_key=settings.ARMORIQ_API_KEY)
     mcps = client.list_mcps()
     client.close()
-    assert any(m.get("id") == settings.ARMORIQ_MCP_NAME for m in mcps)
+    assert any(m.get("name") == settings.ARMORIQ_MCP_NAME for m in mcps)
 
 def test_l3_authentication_credential_delivery():
     """L3: Authentication credential delivery to proxy."""
