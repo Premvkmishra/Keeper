@@ -152,12 +152,12 @@ class AgentService:
             model_name=model_name,
         )
         logger.info(
-            "Agent tool finished request_id=%s tool=%s outcome=%s duration_ms=%d reason=%s",
+            "Agent tool finished request_id=%s tool=%s outcome=%s duration_ms=%d reason_present=%s",
             request_id,
             name,
             result.status,
             round((time.monotonic() - started_at) * 1000),
-            (result.reason or "")[:300],
+            bool(result.reason),
         )
         if result.status == "denied_by_armoriq":
             event = SecurityEvent(
@@ -563,6 +563,7 @@ class AgentService:
             )
             contents.append(response.candidates[0].content)
             fn_response_parts = []
+            ambiguous_tool_outcome = False
             for fc in fn_calls:
                 name = fc.name
                 raw_args = dict(fc.args or {})
@@ -599,9 +600,23 @@ class AgentService:
                         db, household_id, name, raw_args, user_email, message, request_id, active_model
                     )
                 tool_trace.append({"tool": name, "arguments": raw_args, "result": result})
+                if isinstance(result, dict) and result.get("error") == "ambiguous_after_send":
+                    ambiguous_tool_outcome = True
+                    logger.warning(
+                        "Agent stopped after ambiguous tool outcome request_id=%s tool=%s",
+                        request_id,
+                        name,
+                    )
+                    break
                 fn_response_parts.append(
                     types.Part.from_function_response(name=name, response=result if isinstance(result, dict) else {"result": result})
                 )
+            if ambiguous_tool_outcome:
+                reply = (
+                    "The ArmorIQ proxy did not confirm the tool result. I stopped further tool calls "
+                    "to avoid duplicate actions. Check the existing status before retrying."
+                )
+                break
             # Gemini SDK 1.x expects function responses under role="user"
             contents.append(types.Content(role="user", parts=fn_response_parts))
         else:
@@ -785,6 +800,7 @@ class AgentService:
                 }
             )
 
+            ambiguous_tool_outcome = False
             for call in function_calls:
                 name = call.function.name
                 try:
@@ -838,6 +854,14 @@ class AgentService:
                     )
 
                 tool_trace.append({"tool": name, "arguments": raw_args, "result": result})
+                if isinstance(result, dict) and result.get("error") == "ambiguous_after_send":
+                    ambiguous_tool_outcome = True
+                    logger.warning(
+                        "Agent stopped after ambiguous tool outcome request_id=%s tool=%s",
+                        request_id,
+                        name,
+                    )
+                    break
                 messages.append(
                     {
                         "role": "tool",
@@ -846,6 +870,12 @@ class AgentService:
                         "content": json.dumps(result, separators=(",", ":"), default=str),
                     }
                 )
+            if ambiguous_tool_outcome:
+                reply = (
+                    "The ArmorIQ proxy did not confirm the tool result. I stopped further tool calls "
+                    "to avoid duplicate actions. Check the existing status before retrying."
+                )
+                break
         else:
             reply = "I reached the tool-call limit. Please ask about a specific bill or payment status."
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import unittest.mock as mock
 import pytest
 from armoriq_sdk.exceptions import (
@@ -234,6 +235,26 @@ def test_u6_token_expiry_handling_without_duplicate_execution():
     assert res.status == "allowed_and_executed"
     assert mock_client.invoke.call_count == 2
 
+
+def test_token_expiry_retry_failure_after_send_is_ambiguous():
+    gw = ArmorIQGateway()
+    mock_client = mock.MagicMock()
+    mock_client.capture_plan.return_value = mock.MagicMock()
+    mock_client.get_intent_token.return_value = mock.MagicMock()
+    mock_client.invoke.side_effect = [
+        TokenExpiredException("Token expired"),
+        MCPInvocationException("Proxy response lost", status_code=502),
+    ]
+    gw.client = mock_client
+    gw._initialized = True
+
+    result = gw.invoke_tool("propose_payment", {"bill_id": "bill-1", "idempotency_key": "attempt-1"})
+
+    assert result.status == "ambiguous_after_send"
+    assert result.is_ambiguous is True
+    assert mock_client.invoke.call_count == 2
+
+
 def test_u7_timeout_after_invocation_becomes_ambiguous():
     """U7: Timeout after invocation becomes ambiguous."""
     gw = ArmorIQGateway()
@@ -263,6 +284,34 @@ def test_u8_no_automatic_invocation_retry():
     # Call count must be exactly 1
     assert mock_client.invoke.call_count == 1
 
+
+def test_proxy_failure_logs_stage_and_status_without_raw_error_body(caplog):
+    gw = ArmorIQGateway()
+    mock_client = mock.MagicMock()
+    mock_client.capture_plan.return_value = mock.MagicMock()
+    mock_client.get_intent_token.return_value = mock.MagicMock()
+    mock_client.invoke.side_effect = MCPInvocationException(
+        "proxy body: Internal Proxy Error; test-secret",
+        status_code=502,
+    )
+    gw.client = mock_client
+    gw._initialized = True
+
+    with caplog.at_level(logging.ERROR, logger="backend.app.integrations.armoriq_gateway"):
+        result = gw.invoke_tool(
+            "list_bills",
+            {},
+            request_id="diagnostic-request-123",
+        )
+
+    assert result.status == "ambiguous_after_send"
+    assert "diagnostic-request-123" in caplog.text
+    assert "status_code=502" in caplog.text
+    assert "error_type=MCPInvocationException" in caplog.text
+    assert "error_category=internal_proxy_error" in caplog.text
+    assert "test-secret" not in caplog.text
+
+
 def test_u9_mcp_inbound_authentication_is_mandatory(client):
     """U9: MCP inbound authentication is mandatory."""
     res = client.post(
@@ -271,6 +320,23 @@ def test_u9_mcp_inbound_authentication_is_mandatory(client):
     )
     assert res.status_code == 401
     assert "unauthenticated" in res.json()["error"]["code"]
+
+
+def test_mcp_logs_sanitized_upstream_correlation_id(client, caplog):
+    headers = {
+        "Authorization": f"Bearer {settings.KEEPER_MCP_INBOUND_SECRET}",
+        "X-Request-ID": "sdk-request-123",
+    }
+    with caplog.at_level(logging.INFO, logger="backend.app.api.mcp"):
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert "correlation_id=sdk-request-123" in caplog.text
+
 
 def test_mcp_jsonrpc_sse_initialize_list_and_call(client, seed_data, db):
     from datetime import date

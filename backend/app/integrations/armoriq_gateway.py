@@ -2,12 +2,26 @@ import hmac
 import logging
 import secrets
 import threading
+import time
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel
+from urllib.parse import urlsplit
 
 from backend.app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _proxy_error_category(error: BaseException) -> str:
+    message = str(error).lower()
+    if "internal proxy error" in message:
+        return "internal_proxy_error"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "connection" in message:
+        return "connection_error"
+    return "proxy_invocation_error"
+
 
 # Error classification outcomes
 GatewayOutcomeStatus = Literal[
@@ -91,10 +105,22 @@ class ArmorIQGateway:
                     mcp_credentials=mcp_creds if mcp_creds else None,
                 )
                 self._initialized = True
-                logger.info("ArmorIQClient successfully initialized.")
+                logger.info(
+                    "ArmorIQ client initialized enforcement=%s route=%s mcp=%s mcp_host=%s "
+                    "api_key_configured=%s mcp_url_configured=%s inbound_secret_configured=%s "
+                    "proxy_credentials_match=%s",
+                    settings.ARMORIQ_ENFORCEMENT.lower(),
+                    settings.ARMORIQ_ROUTE,
+                    settings.ARMORIQ_MCP_NAME,
+                    urlsplit(settings.KEEPER_MCP_PUBLIC_URL).hostname or "invalid",
+                    bool(settings.ARMORIQ_API_KEY),
+                    bool(settings.KEEPER_MCP_PUBLIC_URL),
+                    bool(settings.KEEPER_MCP_INBOUND_SECRET),
+                    settings.armoriq_mcp_credentials_match,
+                )
             except Exception as e:
-                self._init_error = str(e)
-                logger.error(f"Failed to initialize ArmorIQClient: {e}")
+                self._init_error = f"ArmorIQ client initialization failed ({type(e).__name__})."
+                logger.error("Failed to initialize ArmorIQClient error_type=%s", type(e).__name__)
 
     def close(self):
         with self._lock:
@@ -137,11 +163,13 @@ class ArmorIQGateway:
         """
         request_id = request_id or "untracked"
         model_name = model_name or settings.GEMINI_MODEL
+        invocation_started_at = time.monotonic()
         logger.info(
-            "ArmorIQ tool invocation started request_id=%s mcp=%s action=%s",
+            "ArmorIQ tool invocation started request_id=%s mcp=%s action=%s model=%s",
             request_id,
             settings.ARMORIQ_MCP_NAME,
             tool_name,
+            model_name,
         )
         if settings.ARMORIQ_ENFORCEMENT.lower() != "required":
             return GatewayResult(
@@ -177,6 +205,11 @@ class ArmorIQGateway:
         # Proxy Route Flow
         intent_token = None
         try:
+            logger.info(
+                "ArmorIQ plan capture started request_id=%s action=%s",
+                request_id,
+                tool_name,
+            )
             # 1. Capture Intent Plan
             plan_capture = self.client.capture_plan(
                 llm=model_name,
@@ -194,27 +227,56 @@ class ArmorIQGateway:
             )
 
             # 2. Request Intent Token (validity 60 seconds)
+            logger.info(
+                "ArmorIQ intent token request started request_id=%s action=%s",
+                request_id,
+                tool_name,
+            )
             intent_token = self.client.get_intent_token(
                 plan_capture=plan_capture,
                 validity_seconds=60.0,
             )
             logger.info(
-                "ArmorIQ intent token issued request_id=%s action=%s",
+                "ArmorIQ authorization ready request_id=%s action=%s",
                 request_id,
                 tool_name,
             )
         except PolicyHoldException as e:
+            logger.warning(
+                "ArmorIQ policy hold request_id=%s action=%s stage=authorization",
+                request_id,
+                tool_name,
+            )
             return GatewayResult(status="held_by_armoriq", reason=str(e))
         except (PolicyBlockedException, InvalidTokenException, IntentMismatchException, DelegationException) as e:
+            logger.warning(
+                "ArmorIQ authorization denied request_id=%s action=%s error_type=%s",
+                request_id,
+                tool_name,
+                type(e).__name__,
+            )
             return GatewayResult(status="denied_by_armoriq", reason=f"Intent creation denied: {str(e)}")
         except Exception as e:
-            logger.error(f"Intent token creation failure before send: {e}")
-            return GatewayResult(status="unavailable_before_send", reason=f"Failed before invocation: {str(e)}")
+            logger.error(
+                "ArmorIQ authorization failed before invocation request_id=%s action=%s "
+                "error_type=%s status_code=%s",
+                request_id,
+                tool_name,
+                type(e).__name__,
+                getattr(e, "status_code", None),
+            )
+            return GatewayResult(
+                status="unavailable_before_send",
+                reason=(
+                    "ArmorIQ authorization failed before invocation "
+                    f"({type(e).__name__}, HTTP {getattr(e, 'status_code', None)})."
+                ),
+            )
 
         # 3. Authorized Tool Invocation via ArmorIQ Proxy
         try:
             logger.info(
-                "ArmorIQ proxy invocation sent request_id=%s mcp=%s action=%s",
+                "ArmorIQ proxy invocation started request_id=%s mcp=%s action=%s",
                 request_id,
                 settings.ARMORIQ_MCP_NAME,
                 tool_name,
@@ -226,16 +288,48 @@ class ArmorIQGateway:
                 params=params,
                 user_email=user_email,
             )
-            # Unpack result
+            result_status = getattr(invocation_result, "status", "success")
+            if not isinstance(result_status, str):
+                result_status = "success"
+            verified = getattr(invocation_result, "verified", True)
+            if not isinstance(verified, bool):
+                verified = True
             res_dict = invocation_result.result if hasattr(invocation_result, "result") else invocation_result
+            if result_status != "success" or not verified:
+                elapsed_ms = round((time.monotonic() - invocation_started_at) * 1000)
+                logger.error(
+                    "ArmorIQ proxy returned non-success request_id=%s action=%s sdk_status=%s "
+                    "verified=%s duration_ms=%d outcome=ambiguous_after_send",
+                    request_id,
+                    tool_name,
+                    result_status,
+                    verified,
+                    elapsed_ms,
+                )
+                return GatewayResult(
+                    status="ambiguous_after_send",
+                    reason=f"ArmorIQ invocation returned status={result_status}; execution could not be confirmed.",
+                    is_ambiguous=True,
+                )
+            mcp_is_error = isinstance(res_dict, dict) and bool(res_dict.get("isError"))
             logger.info(
-                "ArmorIQ proxy invocation completed request_id=%s action=%s",
+                "ArmorIQ proxy invocation completed request_id=%s action=%s sdk_status=%s "
+                "verified=%s mcp_is_error=%s duration_ms=%d",
                 request_id,
                 tool_name,
+                result_status,
+                verified,
+                mcp_is_error,
+                round((time.monotonic() - invocation_started_at) * 1000),
             )
             return GatewayResult(status="allowed_and_executed", payload=res_dict)
         except TokenExpiredException:
             # Token expired client-side before send: remint once safely
+            logger.warning(
+                "ArmorIQ intent token expired before send request_id=%s action=%s retrying_once=true",
+                request_id,
+                tool_name,
+            )
             try:
                 plan_capture = self.client.capture_plan(
                     llm=model_name,
@@ -246,6 +340,27 @@ class ArmorIQGateway:
                     },
                 )
                 intent_token = self.client.get_intent_token(plan_capture=plan_capture, validity_seconds=60.0)
+            except PolicyHoldException as e:
+                return GatewayResult(status="held_by_armoriq", reason=str(e))
+            except (PolicyBlockedException, InvalidTokenException, IntentMismatchException, DelegationException) as e:
+                return GatewayResult(status="denied_by_armoriq", reason=str(e))
+            except Exception as e:
+                logger.error(
+                    "ArmorIQ token remint failed before invocation request_id=%s action=%s "
+                    "error_type=%s status_code=%s",
+                    request_id,
+                    tool_name,
+                    type(e).__name__,
+                    getattr(e, "status_code", None),
+                )
+                return GatewayResult(
+                    status="unavailable_before_send",
+                    reason=(
+                        "ArmorIQ intent token remint failed before invocation "
+                        f"({type(e).__name__}, HTTP {getattr(e, 'status_code', None)})."
+                    ),
+                )
+            try:
                 invocation_result = self.client.invoke(
                     mcp=settings.ARMORIQ_MCP_NAME,
                     action=tool_name,
@@ -253,38 +368,157 @@ class ArmorIQGateway:
                     params=params,
                     user_email=user_email,
                 )
-                res_dict = invocation_result.result if hasattr(invocation_result, "result") else invocation_result
-                return GatewayResult(status="allowed_and_executed", payload=res_dict)
+            except TokenExpiredException as e:
+                logger.error(
+                    "ArmorIQ reminted token expired before send request_id=%s action=%s error_type=%s",
+                    request_id,
+                    tool_name,
+                    type(e).__name__,
+                )
+                return GatewayResult(
+                    status="unavailable_before_send",
+                    reason="The reminted intent token expired before invocation; no tool was sent.",
+                )
             except PolicyHoldException as e:
+                logger.warning(
+                    "ArmorIQ policy hold request_id=%s action=%s stage=invoke_after_remint",
+                    request_id,
+                    tool_name,
+                )
                 return GatewayResult(status="held_by_armoriq", reason=str(e))
             except (PolicyBlockedException, InvalidTokenException, IntentMismatchException, DelegationException) as e:
+                logger.warning(
+                    "ArmorIQ authorization denied request_id=%s action=%s "
+                    "stage=invoke_after_remint error_type=%s",
+                    request_id,
+                    tool_name,
+                    type(e).__name__,
+                )
                 return GatewayResult(status="denied_by_armoriq", reason=str(e))
+            except MCPInvocationException as e:
+                logger.error(
+                    "ArmorIQ proxy invocation failed after remint request_id=%s action=%s "
+                    "status_code=%s error_type=%s error_category=%s duration_ms=%d "
+                    "outcome=ambiguous_after_send",
+                    request_id,
+                    tool_name,
+                    e.status_code,
+                    type(e).__name__,
+                    _proxy_error_category(e),
+                    round((time.monotonic() - invocation_started_at) * 1000),
+                )
+                return GatewayResult(
+                    status="ambiguous_after_send",
+                    reason=(
+                        f"ArmorIQ proxy reported {_proxy_error_category(e)} "
+                        f"(HTTP {e.status_code}); tool completion could not be confirmed."
+                    ),
+                    is_ambiguous=True,
+                )
             except Exception as e:
-                return GatewayResult(status="unavailable_before_send", reason=f"Intent remint failed before invocation: {str(e)}")
+                logger.error(
+                    "ArmorIQ proxy invocation failed after remint request_id=%s action=%s "
+                    "error_type=%s status_code=%s error_category=%s duration_ms=%d "
+                    "outcome=ambiguous_after_send",
+                    request_id,
+                    tool_name,
+                    type(e).__name__,
+                    getattr(e, "status_code", None),
+                    _proxy_error_category(e),
+                    round((time.monotonic() - invocation_started_at) * 1000),
+                )
+                return GatewayResult(
+                    status="ambiguous_after_send",
+                    reason="ArmorIQ proxy invocation did not return a confirmed result.",
+                    is_ambiguous=True,
+                )
+            result_status = getattr(invocation_result, "status", "success")
+            if not isinstance(result_status, str):
+                result_status = "success"
+            verified = getattr(invocation_result, "verified", True)
+            if not isinstance(verified, bool):
+                verified = True
+            res_dict = invocation_result.result if hasattr(invocation_result, "result") else invocation_result
+            if result_status != "success" or not verified:
+                logger.error(
+                    "ArmorIQ proxy returned non-success after remint request_id=%s action=%s "
+                    "sdk_status=%s verified=%s duration_ms=%d outcome=ambiguous_after_send",
+                    request_id,
+                    tool_name,
+                    result_status,
+                    verified,
+                    round((time.monotonic() - invocation_started_at) * 1000),
+                )
+                return GatewayResult(
+                    status="ambiguous_after_send",
+                    reason=f"ArmorIQ invocation returned status={result_status}; execution could not be confirmed.",
+                    is_ambiguous=True,
+                )
+            logger.info(
+                "ArmorIQ proxy invocation completed after remint request_id=%s action=%s "
+                "sdk_status=%s verified=%s mcp_is_error=%s duration_ms=%d",
+                request_id,
+                tool_name,
+                result_status,
+                verified,
+                isinstance(res_dict, dict) and bool(res_dict.get("isError")),
+                round((time.monotonic() - invocation_started_at) * 1000),
+            )
+            return GatewayResult(status="allowed_and_executed", payload=res_dict)
         except PolicyHoldException as e:
+            logger.warning(
+                "ArmorIQ policy hold request_id=%s action=%s stage=invoke",
+                request_id,
+                tool_name,
+            )
             return GatewayResult(status="held_by_armoriq", reason=str(e))
         except (PolicyBlockedException, InvalidTokenException, IntentMismatchException, DelegationException) as e:
+            logger.warning(
+                "ArmorIQ authorization denied request_id=%s action=%s stage=invoke error_type=%s",
+                request_id,
+                tool_name,
+                type(e).__name__,
+            )
             return GatewayResult(status="denied_by_armoriq", reason=str(e))
         except MCPInvocationException as e:
             # Invocation exception after send -> classified as ambiguous
             logger.error(
-                "ArmorIQ proxy invocation failed after send request_id=%s action=%s status=%s error=%s",
+                "ArmorIQ proxy invocation failed after send request_id=%s action=%s "
+                "status_code=%s error_type=%s error_category=%s duration_ms=%d "
+                "outcome=ambiguous_after_send",
                 request_id,
                 tool_name,
                 e.status_code,
-                str(e)[:300],
+                type(e).__name__,
+                _proxy_error_category(e),
+                round((time.monotonic() - invocation_started_at) * 1000),
             )
-            return GatewayResult(status="ambiguous_after_send", reason=str(e), is_ambiguous=True)
+            return GatewayResult(
+                status="ambiguous_after_send",
+                reason=(
+                    f"ArmorIQ proxy reported {_proxy_error_category(e)} "
+                    f"(HTTP {e.status_code}); tool completion could not be confirmed."
+                ),
+                is_ambiguous=True,
+            )
         except Exception as e:
             # Network drop / timeout after send -> ambiguous
             logger.error(
-                "ArmorIQ proxy invocation failed after send request_id=%s action=%s error_type=%s error=%s",
+                "ArmorIQ proxy invocation failed after send request_id=%s action=%s "
+                "error_type=%s status_code=%s error_category=%s duration_ms=%d "
+                "outcome=ambiguous_after_send",
                 request_id,
                 tool_name,
                 type(e).__name__,
-                str(e)[:300],
+                getattr(e, "status_code", None),
+                _proxy_error_category(e),
+                round((time.monotonic() - invocation_started_at) * 1000),
             )
-            return GatewayResult(status="ambiguous_after_send", reason=str(e), is_ambiguous=True)
+            return GatewayResult(
+                status="ambiguous_after_send",
+                reason="ArmorIQ proxy invocation did not return a confirmed result.",
+                is_ambiguous=True,
+            )
 
     @staticmethod
     def verify_inbound_secret(auth_header: Optional[str]) -> bool:

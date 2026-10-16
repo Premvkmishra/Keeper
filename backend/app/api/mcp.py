@@ -1,9 +1,10 @@
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
@@ -23,14 +24,26 @@ from backend.app.services.mcp_tools import (
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 logger = logging.getLogger(__name__)
 
+_CORRELATION_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,100}\Z")
 
-def verify_mcp_auth(authorization: Optional[str] = Header(None)):
+
+def _correlation_id(request: Request) -> str:
+    value = request.headers.get("x-request-id", "")
+    return value if _CORRELATION_ID_PATTERN.fullmatch(value) else "invalid"
+
+
+def verify_mcp_auth(request: Request, authorization: Optional[str] = Header(None)):
+    correlation_id = _correlation_id(request)
     if not ArmorIQGateway.verify_inbound_secret(authorization):
-        logger.warning("MCP request rejected reason=invalid_or_missing_bearer")
+        logger.warning(
+            "MCP request rejected correlation_id=%s reason=invalid_or_missing_bearer",
+            correlation_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "unauthenticated", "message": "Invalid or missing MCP inbound bearer secret."},
         )
+    logger.info("MCP request authenticated correlation_id=%s", correlation_id)
 
 
 class MCPToolCall(BaseModel):
@@ -81,16 +94,27 @@ def _rpc_error(request_id: Any, code: int, message: str, data: Any = None) -> Di
 
 @router.post("", dependencies=[Depends(verify_mcp_auth)])
 def mcp_endpoint(
+    request: Request,
     message: Dict[str, Any],
     db: Session = Depends(get_db),
 ):
     request_id = message.get("id")
+    correlation_id = _correlation_id(request)
     if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+        logger.warning(
+            "MCP request rejected correlation_id=%s reason=invalid_jsonrpc",
+            correlation_id,
+        )
         return _sse_message(_rpc_error(request_id, -32600, "Invalid JSON-RPC request."))
 
     method = message["method"]
     trace_id = uuid.uuid4().hex
-    logger.info("MCP request received trace_id=%s method=%r", trace_id, method)
+    logger.info(
+        "MCP request received correlation_id=%s trace_id=%s method=%r",
+        correlation_id,
+        trace_id,
+        method,
+    )
     if method == "notifications/initialized":
         return Response(status_code=202)
     if method == "initialize":
@@ -112,7 +136,8 @@ def mcp_endpoint(
     try:
         tool_call = MCPToolCall.model_validate(message.get("params", {}))
         logger.info(
-            "MCP tool call received trace_id=%s tool=%r",
+            "MCP tool call received correlation_id=%s trace_id=%s tool=%r",
+            correlation_id,
             trace_id,
             tool_call.name,
         )
@@ -122,13 +147,16 @@ def mcp_endpoint(
         household_id = resolve_authorization_context(context_token)
         started_at = time.monotonic()
         logger.info(
-            "MCP tool execution started trace_id=%s tool=%r",
+            "MCP tool execution started correlation_id=%s trace_id=%s tool=%r",
+            correlation_id,
             trace_id,
             tool_call.name,
         )
         result = execute_tool(db, household_id, tool_call.name, tool_call.arguments)
         logger.info(
-            "MCP tool execution returned trace_id=%s tool=%r duration_ms=%d",
+            "MCP tool execution returned correlation_id=%s trace_id=%s tool=%r "
+            "is_error=false duration_ms=%d",
+            correlation_id,
             trace_id,
             tool_call.name,
             round((time.monotonic() - started_at) * 1000),
@@ -140,13 +168,15 @@ def mcp_endpoint(
         return _sse_message({"jsonrpc": "2.0", "id": request_id, "result": tool_result})
     except ValidationError as exc:
         logger.warning(
-            "MCP tool call rejected trace_id=%s reason=invalid_arguments",
+            "MCP tool call rejected correlation_id=%s trace_id=%s reason=invalid_arguments",
+            correlation_id,
             trace_id,
         )
         return _sse_message(_rpc_error(request_id, -32602, "Invalid tool arguments.", exc.errors()))
     except HTTPException as exc:
         logger.warning(
-            "MCP tool call rejected trace_id=%s status=%s",
+            "MCP tool call rejected correlation_id=%s trace_id=%s status=%s",
+            correlation_id,
             trace_id,
             exc.status_code,
         )

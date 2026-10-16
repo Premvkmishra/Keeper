@@ -315,6 +315,134 @@ def test_groq_tool_call_uses_armoriq_and_returns_followup_response(db, monkeypat
     assert requests[1]["messages"][-1]["role"] == "tool"
 
 
+def test_groq_stops_after_ambiguous_tool_result(db, monkeypatch):
+    import groq
+
+    monkeypatch.setattr(config.settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(config.settings, "GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setattr(config.settings, "GROQ_MODEL", "openai/gpt-oss-20b")
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-ambiguous",
+                                function=SimpleNamespace(name="list_bills", arguments="{}"),
+                            )
+                        ],
+                    )
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Retrying the tool.", tool_calls=[])
+                )
+            ]
+        ),
+    ]
+    completion_calls = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            completion_calls.append(kwargs)
+            return responses.pop(0)
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(groq, "Groq", FakeClient)
+
+    from backend.app.services import agent_service
+
+    invocations = []
+
+    def invoke_tool(name, _params, **_kwargs):
+        invocations.append(name)
+        return GatewayResult(
+            status="ambiguous_after_send",
+            reason="ArmorIQ proxy returned an indeterminate response.",
+            is_ambiguous=True,
+        )
+
+    monkeypatch.setattr(agent_service.armoriq_gateway, "invoke_tool", invoke_tool)
+    result = AgentService().chat(
+        db=db,
+        household_id="household-id",
+        user_email="owner@example.test",
+        message="List bills.",
+    )
+
+    assert len(completion_calls) == 1
+    assert invocations == ["list_bills"]
+    assert len(result["tool_trace"]) == 1
+    assert "stopped further tool calls" in result["reply"]
+
+
+def test_gemini_stops_after_ambiguous_tool_result(db, monkeypatch):
+    import google.genai
+
+    monkeypatch.setattr(config.settings, "LLM_PROVIDER", "gemini")
+    monkeypatch.setattr(config.settings, "GEMINI_API_KEY", "test-gemini-key")
+    responses = [
+        SimpleNamespace(
+            function_calls=[SimpleNamespace(name="list_bills", args={})],
+            candidates=[
+                SimpleNamespace(
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text="request list_bills")],
+                    )
+                )
+            ],
+            text=None,
+        ),
+        SimpleNamespace(function_calls=[], candidates=[], text="Retrying the tool."),
+    ]
+    model_calls = []
+
+    class FakeModels:
+        def generate_content(self, **_kwargs):
+            model_calls.append(True)
+            return responses.pop(0)
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(google.genai, "Client", FakeClient)
+
+    from backend.app.services import agent_service
+
+    invocations = []
+
+    def invoke_tool(name, _params, **_kwargs):
+        invocations.append(name)
+        return GatewayResult(
+            status="ambiguous_after_send",
+            reason="ArmorIQ proxy returned an indeterminate response.",
+            is_ambiguous=True,
+        )
+
+    monkeypatch.setattr(agent_service.armoriq_gateway, "invoke_tool", invoke_tool)
+    result = AgentService().chat(
+        db=db,
+        household_id="household-id",
+        user_email="owner@example.test",
+        message="List bills.",
+    )
+
+    assert len(model_calls) == 1
+    assert invocations == ["list_bills"]
+    assert len(result["tool_trace"]) == 1
+    assert "stopped further tool calls" in result["reply"]
+
+
 def test_groq_falls_back_after_model_not_found(db, monkeypatch):
     import groq
 
