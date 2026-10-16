@@ -85,7 +85,7 @@ def test_gateway_uses_sdk_proxy_and_auth_type_contract():
     settings.ARMORIQ_API_KEY = "test_key"
     settings.KEEPER_MCP_PUBLIC_URL = "https://mcp.example.test/mcp"
     settings.KEEPER_MCP_INBOUND_SECRET = "backend-secret"
-    settings.ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN = "proxy-token"
+    settings.ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN = "backend-secret"
     try:
         with mock.patch("armoriq_sdk.ArmorIQClient") as client_class:
             gw.initialize()
@@ -93,11 +93,33 @@ def test_gateway_uses_sdk_proxy_and_auth_type_contract():
         assert "proxy_endpoint" not in kwargs
         assert kwargs["mcp_credentials"][settings.ARMORIQ_MCP_NAME] == {
             "authType": "bearer",
-            "token": "proxy-token",
+            "token": "backend-secret",
         }
     finally:
         for name, value in old_values.items():
             setattr(settings, name, value)
+
+def test_gateway_rejects_mismatched_mcp_bearer_credentials(monkeypatch):
+    gw = ArmorIQGateway()
+    monkeypatch.setattr(settings, "ARMORIQ_ENFORCEMENT", "required")
+    monkeypatch.setattr(settings, "ARMORIQ_ROUTE", "proxy")
+    monkeypatch.setattr(settings, "ARMORIQ_API_KEY", "test_key")
+    monkeypatch.setattr(settings, "KEEPER_MCP_PUBLIC_URL", "https://mcp.example.test/mcp")
+    monkeypatch.setattr(settings, "KEEPER_MCP_INBOUND_SECRET", "backend-secret")
+    monkeypatch.setattr(settings, "ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN", "different-proxy-token")
+
+    with mock.patch("armoriq_sdk.ArmorIQClient") as client_class:
+        gw.initialize()
+
+    assert gw.is_healthy() == "down"
+    assert "must match KEEPER_MCP_INBOUND_SECRET" in (gw._init_error or "")
+    client_class.assert_not_called()
+
+    from backend.app.services.agent_service import processing_configuration_blockers
+
+    assert "ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN must match KEEPER_MCP_INBOUND_SECRET" in (
+        processing_configuration_blockers()
+    )
 
 def test_mcp_household_context_is_signed_and_tamper_evident(seed_data):
     household_id = str(seed_data["h1"].id)

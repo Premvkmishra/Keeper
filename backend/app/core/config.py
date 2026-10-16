@@ -1,3 +1,4 @@
+import hmac
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, AliasChoices
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "gemini"
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_FALLBACK_MODELS: str = "gemini-2.5-flash-lite,gemini-2.5-pro"
 
     # Hard ceiling that ordinary human approval cannot override
     HARD_PAYMENT_LIMIT: float = 100000.00
@@ -55,7 +57,21 @@ class Settings(BaseSettings):
         return self.ARMORIQ_ENFORCEMENT.lower() not in ("disabled", "optional")
 
     @property
+    def armoriq_mcp_credentials_match(self) -> bool:
+        proxy_token = self.ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN
+        inbound_secret = self.KEEPER_MCP_INBOUND_SECRET
+        if not proxy_token:
+            return True
+        return bool(inbound_secret and hmac.compare_digest(proxy_token, inbound_secret))
+
+    @property
     def mock_bank_base_url(self) -> str:
         return f"http://127.0.0.1:{self.APP_PORT}/_internal/mock-bank"
+
+    @property
+    def gemini_model_fallbacks(self) -> List[str]:
+        configured = (model.strip() for model in self.GEMINI_FALLBACK_MODELS.split(","))
+        return list(dict.fromkeys(model for model in configured if model and model != self.GEMINI_MODEL))
+
 
 settings = Settings()

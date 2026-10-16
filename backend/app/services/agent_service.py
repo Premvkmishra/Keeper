@@ -1,5 +1,6 @@
 """Gemini-backed Keeper agent. Tools run only through ArmorIQ or an explicit local-unprotected path."""
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -85,6 +86,10 @@ def processing_configuration_blockers() -> List[str]:
         blockers.append("KEEPER_MCP_PUBLIC_URL is missing")
     if not settings.KEEPER_MCP_INBOUND_SECRET:
         blockers.append("KEEPER_MCP_INBOUND_SECRET is missing")
+    elif not settings.armoriq_mcp_credentials_match:
+        blockers.append(
+            "ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN must match KEEPER_MCP_INBOUND_SECRET"
+        )
     if not settings.MOCK_BANK_AUTH_TOKEN:
         blockers.append("MOCK_BANK_AUTH_TOKEN is missing")
     if not settings.SUPABASE_JWT_SECRET:
@@ -115,19 +120,38 @@ class AgentService:
         arguments: Dict[str, Any],
         user_email: str,
         intent_prompt: str,
+        request_id: str,
+        model_name: str,
     ) -> Dict[str, Any]:
         if name not in ALLOWED_TOOLS:
+            logger.warning(
+                "Agent tool rejected request_id=%s tool=%s reason=not_permitted",
+                request_id,
+                name,
+            )
             return {"error": "tool_not_permitted", "message": f"Tool '{name}' is not available to the agent."}
 
         scoped_arguments = {
             **arguments,
             "authorization_context": create_authorization_context(household_id, user_email),
         }
+        started_at = time.monotonic()
+        logger.info("Agent tool started request_id=%s tool=%s", request_id, name)
         result = armoriq_gateway.invoke_tool(
             name,
             scoped_arguments,
             user_email=user_email,
             intent_prompt=intent_prompt,
+            request_id=request_id,
+            model_name=model_name,
+        )
+        logger.info(
+            "Agent tool finished request_id=%s tool=%s outcome=%s duration_ms=%d reason=%s",
+            request_id,
+            name,
+            result.status,
+            round((time.monotonic() - started_at) * 1000),
+            (result.reason or "")[:300],
         )
         if result.status == "denied_by_armoriq":
             event = SecurityEvent(
@@ -372,6 +396,13 @@ class AgentService:
             )
 
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        request_id = str(uuid.uuid4())
+        logger.info(
+            "Agent request started request_id=%s model=%s approved_bill=%s",
+            request_id,
+            settings.GEMINI_MODEL,
+            bool(approved_bill_id),
+        )
         declarations = [
             types.FunctionDeclaration(
                 name=t["name"],
@@ -390,23 +421,100 @@ class AgentService:
         tool_trace: List[Dict[str, Any]] = []
         reply = ""
         approved_bill_loaded = False
-        for _ in range(6):
-            try:
-                response = client.models.generate_content(
-                    model=settings.GEMINI_MODEL,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        tools=tools,
-                        system_instruction=SYSTEM_PROMPT,
-                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                        temperature=0.2,
-                    ),
-                )
-            except Exception as e:
-                logger.error("Gemini generate_content failed: %s", e)
+        active_model = settings.GEMINI_MODEL
+        model_chain = [settings.GEMINI_MODEL, *settings.gemini_model_fallbacks]
+        for step in range(6):
+            response = None
+            start_index = model_chain.index(active_model)
+            for model_index in range(start_index, len(model_chain)):
+                model_name = model_chain[model_index]
+                max_attempts = 3 if model_name == settings.GEMINI_MODEL else 1
+                for attempt in range(max_attempts):
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                tools=tools,
+                                system_instruction=SYSTEM_PROMPT,
+                                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                                temperature=0.2,
+                            ),
+                        )
+                        active_model = model_name
+                        logger.info(
+                            "Gemini response received request_id=%s model=%s step=%d attempt=%d",
+                            request_id,
+                            model_name,
+                            step + 1,
+                            attempt + 1,
+                        )
+                        break
+                    except Exception as e:
+                        provider_status = getattr(e, "code", None)
+                        retryable = provider_status in (429, 500, 502, 503, 504)
+                        fallbackable = provider_status in (400, 403, 404, 429, 500, 502, 503, 504)
+                        if retryable and attempt < max_attempts - 1:
+                            delay = 0.5 * (2**attempt)
+                            logger.warning(
+                                "Gemini transient failure request_id=%s model=%s status=%s provider_status=%s "
+                                "attempt=%d retry_in_seconds=%.1f",
+                                request_id,
+                                model_name,
+                                provider_status,
+                                getattr(e, "status", None),
+                                attempt + 1,
+                                delay,
+                            )
+                            time.sleep(delay)
+                            continue
+
+                        has_fallback = model_index < len(model_chain) - 1
+                        if fallbackable and has_fallback:
+                            logger.warning(
+                                "Gemini switching model request_id=%s failed_model=%s next_model=%s "
+                                "provider_status=%s",
+                                request_id,
+                                model_name,
+                                model_chain[model_index + 1],
+                                provider_status,
+                            )
+                            break
+
+                        logger.error(
+                            "Gemini request failed request_id=%s model=%s status=%s provider_status=%s "
+                            "attempt=%d error_type=%s message=%s",
+                            request_id,
+                            model_name,
+                            provider_status,
+                            getattr(e, "status", None),
+                            attempt + 1,
+                            type(e).__name__,
+                            str(getattr(e, "message", None) or e)[:300],
+                        )
+                        raise HTTPException(
+                            status_code=503,
+                            detail={
+                                "code": "dependency_unavailable",
+                                "message": (
+                                    f"Configured Gemini models are unavailable (last HTTP {provider_status}). "
+                                    "Please try again shortly."
+                                    if provider_status
+                                    else "Configured Gemini models are unavailable. Please try again shortly."
+                                ),
+                            },
+                        ) from e
+
+                if response is not None:
+                    break
+
+            if response is None:
                 raise HTTPException(
                     status_code=503,
-                    detail={"code": "dependency_unavailable", "message": "The language model is unavailable or quota was exceeded."},
+                    detail={
+                        "code": "dependency_unavailable",
+                        "message": "Configured Gemini models are unavailable. Please try again shortly.",
+                    },
                 )
 
             fn_calls = list(getattr(response, "function_calls", None) or [])
@@ -420,8 +528,20 @@ class AgentService:
 
             if not fn_calls:
                 reply = (response.text or "").strip()
+                logger.info(
+                    "Agent response completed request_id=%s steps=%d tools=%d",
+                    request_id,
+                    step + 1,
+                    len(tool_trace),
+                )
                 break
 
+            logger.info(
+                "Gemini requested tools request_id=%s step=%d tools=%s",
+                request_id,
+                step + 1,
+                ",".join(str(fc.name) for fc in fn_calls),
+            )
             contents.append(response.candidates[0].content)
             fn_response_parts = []
             for fc in fn_calls:
@@ -429,7 +549,9 @@ class AgentService:
                 raw_args = dict(fc.args or {})
                 if approved_bill_id:
                     if name == "get_bill" and raw_args.get("bill_id") == approved_bill_id:
-                        result = self._run_tool(db, household_id, name, raw_args, user_email, message)
+                        result = self._run_tool(
+                            db, household_id, name, raw_args, user_email, message, request_id, active_model
+                        )
                         approved_bill_loaded = not result.get("error")
                     elif name == "propose_payment" and raw_args.get("bill_id") == approved_bill_id and approved_bill_loaded:
                         result = self._run_tool(
@@ -439,16 +561,24 @@ class AgentService:
                             {"bill_id": approved_bill_id, "idempotency_key": idempotency_key},
                             user_email,
                             message,
+                            request_id,
+                            active_model,
                         )
                     else:
                         result = {"error": "approval_scope_violation", "message": "Only the approved bill may be processed."}
                 elif name == "propose_payment":
+                    logger.warning(
+                        "Agent payment tool rejected request_id=%s reason=explicit_bill_scope_required",
+                        request_id,
+                    )
                     result = {
                         "error": "payment_scope_required",
                         "message": "Payment tools are available only from an explicit, backend-scoped bill request.",
                     }
                 else:
-                    result = self._run_tool(db, household_id, name, raw_args, user_email, message)
+                    result = self._run_tool(
+                        db, household_id, name, raw_args, user_email, message, request_id, active_model
+                    )
                 tool_trace.append({"tool": name, "arguments": raw_args, "result": result})
                 fn_response_parts.append(
                     types.Part.from_function_response(name=name, response=result if isinstance(result, dict) else {"result": result})
@@ -462,6 +592,6 @@ class AgentService:
             "reply": reply or "I could not produce a response.",
             "tool_trace": tool_trace,
             "enforcement_mode": settings.ARMORIQ_ENFORCEMENT,
-            "model": settings.GEMINI_MODEL,
-            "conversation_id": str(uuid.uuid4()),
+            "model": active_model,
+            "conversation_id": request_id,
         }

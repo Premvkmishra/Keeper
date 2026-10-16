@@ -42,12 +42,20 @@ class ArmorIQGateway:
         with self._lock:
             if self._initialized:
                 return
+            self._init_error = None
             if settings.ARMORIQ_ENFORCEMENT.lower() != "required":
                 self._init_error = "ARMORIQ_ENFORCEMENT must be required for tool execution."
                 logger.error(self._init_error)
                 return
             if settings.ARMORIQ_ROUTE != "proxy":
                 self._init_error = "ARMORIQ_ROUTE must be proxy for enforced tool execution."
+                logger.error(self._init_error)
+                return
+            if not settings.armoriq_mcp_credentials_match:
+                self._init_error = (
+                    "ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN must match "
+                    "KEEPER_MCP_INBOUND_SECRET."
+                )
                 logger.error(self._init_error)
                 return
             missing = [
@@ -68,10 +76,7 @@ class ArmorIQGateway:
                 from armoriq_sdk import ArmorIQClient
                 # Setup credentials map for MCP bearer token
                 mcp_creds = {}
-                token_to_use = (
-                    settings.ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN
-                    or settings.KEEPER_MCP_INBOUND_SECRET
-                )
+                token_to_use = settings.KEEPER_MCP_INBOUND_SECRET
                 if token_to_use:
                     mcp_creds[settings.ARMORIQ_MCP_NAME] = {
                         "authType": settings.ARMORIQ_MCP_KEEPER_PAYMENTS_AUTH_TYPE,
@@ -107,6 +112,8 @@ class ArmorIQGateway:
             return "unconfigured"
         if not settings.ARMORIQ_API_KEY:
             return "unconfigured"
+        if not settings.armoriq_mcp_credentials_match:
+            return "down"
         if not self._initialized or self._init_error:
             return "down"
         return "ok"
@@ -117,6 +124,8 @@ class ArmorIQGateway:
         params: Dict[str, Any],
         user_email: str = "agent@keeper.internal",
         intent_prompt: Optional[str] = None,
+        request_id: Optional[str] = None,
+        model_name: Optional[str] = None,
     ) -> GatewayResult:
         """
         Executes an agent tool invocation governed by ArmorIQ.
@@ -126,6 +135,14 @@ class ArmorIQGateway:
         - unavailable_before_send
         - ambiguous_after_send
         """
+        request_id = request_id or "untracked"
+        model_name = model_name or settings.GEMINI_MODEL
+        logger.info(
+            "ArmorIQ tool invocation started request_id=%s mcp=%s action=%s",
+            request_id,
+            settings.ARMORIQ_MCP_NAME,
+            tool_name,
+        )
         if settings.ARMORIQ_ENFORCEMENT.lower() != "required":
             return GatewayResult(
                 status="unavailable_before_send",
@@ -162,7 +179,7 @@ class ArmorIQGateway:
         try:
             # 1. Capture Intent Plan
             plan_capture = self.client.capture_plan(
-                llm=settings.GEMINI_MODEL,
+                llm=model_name,
                 prompt=(intent_prompt or f"Execute tool {tool_name} with parameters")[:4000],
                 plan={
                     "goal": f"Invoke the permitted Keeper tool {tool_name}.",
@@ -181,6 +198,11 @@ class ArmorIQGateway:
                 plan_capture=plan_capture,
                 validity_seconds=60.0,
             )
+            logger.info(
+                "ArmorIQ intent token issued request_id=%s action=%s",
+                request_id,
+                tool_name,
+            )
         except PolicyHoldException as e:
             return GatewayResult(status="held_by_armoriq", reason=str(e))
         except (PolicyBlockedException, InvalidTokenException, IntentMismatchException, DelegationException) as e:
@@ -191,6 +213,12 @@ class ArmorIQGateway:
 
         # 3. Authorized Tool Invocation via ArmorIQ Proxy
         try:
+            logger.info(
+                "ArmorIQ proxy invocation sent request_id=%s mcp=%s action=%s",
+                request_id,
+                settings.ARMORIQ_MCP_NAME,
+                tool_name,
+            )
             invocation_result = self.client.invoke(
                 mcp=settings.ARMORIQ_MCP_NAME,
                 action=tool_name,
@@ -200,12 +228,17 @@ class ArmorIQGateway:
             )
             # Unpack result
             res_dict = invocation_result.result if hasattr(invocation_result, "result") else invocation_result
+            logger.info(
+                "ArmorIQ proxy invocation completed request_id=%s action=%s",
+                request_id,
+                tool_name,
+            )
             return GatewayResult(status="allowed_and_executed", payload=res_dict)
         except TokenExpiredException:
             # Token expired client-side before send: remint once safely
             try:
                 plan_capture = self.client.capture_plan(
-                    llm=settings.GEMINI_MODEL,
+                    llm=model_name,
                     prompt=(intent_prompt or f"Execute tool {tool_name} with parameters")[:4000],
                     plan={
                         "goal": f"Invoke the permitted Keeper tool {tool_name}.",
@@ -234,11 +267,23 @@ class ArmorIQGateway:
             return GatewayResult(status="denied_by_armoriq", reason=str(e))
         except MCPInvocationException as e:
             # Invocation exception after send -> classified as ambiguous
-            logger.error(f"MCP Invocation error after send: {e}")
+            logger.error(
+                "ArmorIQ proxy invocation failed after send request_id=%s action=%s status=%s error=%s",
+                request_id,
+                tool_name,
+                e.status_code,
+                str(e)[:300],
+            )
             return GatewayResult(status="ambiguous_after_send", reason=str(e), is_ambiguous=True)
         except Exception as e:
             # Network drop / timeout after send -> ambiguous
-            logger.error(f"Network drop / timeout after tool invocation: {e}")
+            logger.error(
+                "ArmorIQ proxy invocation failed after send request_id=%s action=%s error_type=%s error=%s",
+                request_id,
+                tool_name,
+                type(e).__name__,
+                str(e)[:300],
+            )
             return GatewayResult(status="ambiguous_after_send", reason=str(e), is_ambiguous=True)
 
     @staticmethod

@@ -1,4 +1,7 @@
 import json
+import logging
+import time
+import uuid
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
@@ -18,10 +21,12 @@ from backend.app.services.mcp_tools import (
 )
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
+logger = logging.getLogger(__name__)
 
 
 def verify_mcp_auth(authorization: Optional[str] = Header(None)):
     if not ArmorIQGateway.verify_inbound_secret(authorization):
+        logger.warning("MCP request rejected reason=invalid_or_missing_bearer")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "unauthenticated", "message": "Invalid or missing MCP inbound bearer secret."},
@@ -84,6 +89,8 @@ def mcp_endpoint(
         return _sse_message(_rpc_error(request_id, -32600, "Invalid JSON-RPC request."))
 
     method = message["method"]
+    trace_id = uuid.uuid4().hex
+    logger.info("MCP request received trace_id=%s method=%r", trace_id, method)
     if method == "notifications/initialized":
         return Response(status_code=202)
     if method == "initialize":
@@ -104,19 +111,45 @@ def mcp_endpoint(
 
     try:
         tool_call = MCPToolCall.model_validate(message.get("params", {}))
+        logger.info(
+            "MCP tool call received trace_id=%s tool=%r",
+            trace_id,
+            tool_call.name,
+        )
         context_token = tool_call.arguments.get("authorization_context")
         if not isinstance(context_token, str):
             raise HTTPException(status_code=401, detail="Signed MCP authorization context is required.")
         household_id = resolve_authorization_context(context_token)
+        started_at = time.monotonic()
+        logger.info(
+            "MCP tool execution started trace_id=%s tool=%r",
+            trace_id,
+            tool_call.name,
+        )
         result = execute_tool(db, household_id, tool_call.name, tool_call.arguments)
+        logger.info(
+            "MCP tool execution returned trace_id=%s tool=%r duration_ms=%d",
+            trace_id,
+            tool_call.name,
+            round((time.monotonic() - started_at) * 1000),
+        )
         tool_result = {
             "content": [{"type": "text", "text": json.dumps(result, separators=(",", ":"), default=str)}],
             "isError": False,
         }
         return _sse_message({"jsonrpc": "2.0", "id": request_id, "result": tool_result})
     except ValidationError as exc:
+        logger.warning(
+            "MCP tool call rejected trace_id=%s reason=invalid_arguments",
+            trace_id,
+        )
         return _sse_message(_rpc_error(request_id, -32602, "Invalid tool arguments.", exc.errors()))
     except HTTPException as exc:
+        logger.warning(
+            "MCP tool call rejected trace_id=%s status=%s",
+            trace_id,
+            exc.status_code,
+        )
         detail = exc.detail if isinstance(exc.detail, (dict, str)) else str(exc.detail)
         tool_result = {
             "content": [{"type": "text", "text": json.dumps({"error": detail}, default=str)}],

@@ -104,6 +104,10 @@ Required variables:
 - `KEEPER_MCP_PUBLIC_URL`: Public HTTPS MCP URL ending in `/mcp`, registered in ArmorIQ.
 - `KEEPER_MCP_INBOUND_SECRET`: Shared secret for bearer authentication on `/mcp`.
 - `GEMINI_API_KEY`: Server-side Gemini API key.
+- `GEMINI_MODEL`: Primary Gemini model (default: `gemini-2.5-flash`).
+- `GEMINI_FALLBACK_MODELS`: Comma-separated Gemini fallback models (default: `gemini-2.5-flash-lite,gemini-2.5-pro`). Transient failures retry the primary, then try each fallback once; all models must support the configured tool-calling request.
+
+The agent currently uses the Gemini Developer API. Gemma is an open-weight model family and is not a Gemini API model-ID fallback. A final Gemma fallback requires a separately deployed Vertex AI endpoint, its serving-container request/response format, and Vertex credentials for the backend runtime. When the endpoint is provisioned, the adapter will need its full resource name (`projects/{project}/locations/{location}/endpoints/{endpoint}`), location, and runtime service-account access to invoke it. Do not add a Gemma model ID to `GEMINI_FALLBACK_MODELS`; until that endpoint adapter is implemented and configured, Gemini failover returns an explicit unavailable response.
 
 The frontend uses Supabase Auth email/password sign-in and sign-up. New accounts create a private household and default policy after authentication; Supabase email confirmation may need to be completed before sign-in, depending on the project’s Auth settings. There is no built-in demo-token login fallback.
 
@@ -149,6 +153,7 @@ For one Render web service, Keeper mounts the simulated bank inside the same Fas
 - **Native Python deployment**: set the root directory to `backend`, build with `pip install .`, and start with `sh render-start.sh`.
 - Set the health check path to `/health`.
 - Attach a persistent disk mounted at `/var/data`; set `MOCK_BANK_DATABASE_PATH=/var/data/bank_ledger.db`.
+- `ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN`, when set, must exactly match `KEEPER_MCP_INBOUND_SECRET`; Keeper now rejects a mismatch instead of reporting the ArmorIQ integration healthy.
 - Configure backend secrets in Render's environment settings, not in a committed `.env`. Set `MOCK_BANK_AUTH_TOKEN` to a strong random value, `ARMORIQ_ENFORCEMENT=required`, `ARMORIQ_ROUTE=proxy`, and `KEEPER_MCP_PUBLIC_URL` to the Render HTTPS URL ending in `/mcp`. Any legacy `MOCK_BANK_BASE_URL` setting is ignored; bank traffic uses the backend's internal mock-bank routes.
 - Set `KEEPER_MCP_INBOUND_SECRET` to a strong random bearer token. Configure the ArmorIQ MCP registry to send that exact token as its Bearer token. If `ARMORIQ_MCP_KEEPER_PAYMENTS_TOKEN` is set, it must match the registry token too.
 - Set `CORS_ORIGINS` to the exact Railway frontend origin. Set the frontend build-time `VITE_API_BASE_URL` to the Render API origin and configure Supabase Auth's Site URL/redirect URLs for the Railway domain.
