@@ -20,6 +20,7 @@ dependencies = [
     "python-multipart>=0.0.9,<1.0.0",
     "armoriq-sdk==0.6.10",
     "google-genai>=1.0.0,<2.0.0",
+    "groq>=0.13.0,<1.0.0",
 ]
 
 [project.optional-dependencies]

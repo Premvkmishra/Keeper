@@ -33,8 +33,11 @@ class Settings(BaseSettings):
     # CORS configuration
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:8080"
 
-    # Gemini agent
-    LLM_PROVIDER: str = "gemini"
+    # Agent LLM providers
+    LLM_PROVIDER: str = "groq"
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    GROQ_FALLBACK_MODELS: str = "openai/gpt-oss-120b"
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_FALLBACK_MODELS: str = "gemini-2.5-flash-lite,gemini-2.5-pro"
@@ -72,6 +75,11 @@ class Settings(BaseSettings):
     def gemini_model_fallbacks(self) -> List[str]:
         configured = (model.strip() for model in self.GEMINI_FALLBACK_MODELS.split(","))
         return list(dict.fromkeys(model for model in configured if model and model != self.GEMINI_MODEL))
+
+    @property
+    def groq_model_fallbacks(self) -> List[str]:
+        configured = (model.strip() for model in self.GROQ_FALLBACK_MODELS.split(","))
+        return list(dict.fromkeys(model for model in configured if model and model != self.GROQ_MODEL))
 
 
 settings = Settings()

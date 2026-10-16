@@ -1,4 +1,5 @@
-"""Gemini-backed Keeper agent. Tools run only through ArmorIQ or an explicit local-unprotected path."""
+"""LLM-backed Keeper agent. Tools run only through ArmorIQ or an explicit local-unprotected path."""
+import json
 import logging
 import time
 import uuid
@@ -94,8 +95,13 @@ def processing_configuration_blockers() -> List[str]:
         blockers.append("MOCK_BANK_AUTH_TOKEN is missing")
     if not settings.SUPABASE_JWT_SECRET:
         blockers.append("SUPABASE_JWT_SECRET is missing")
-    if not settings.GEMINI_API_KEY:
+    provider = settings.LLM_PROVIDER.lower()
+    if provider == "groq" and not settings.GROQ_API_KEY:
+        blockers.append("GROQ_API_KEY is missing")
+    elif provider == "gemini" and not settings.GEMINI_API_KEY:
         blockers.append("GEMINI_API_KEY is missing")
+    elif provider not in ("groq", "gemini"):
+        blockers.append("LLM_PROVIDER must be groq or gemini")
     return blockers
 
 
@@ -378,8 +384,21 @@ class AgentService:
         approved_bill_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if settings.LLM_PROVIDER.lower() == "groq":
+            return self._chat_groq(
+                db=db,
+                household_id=household_id,
+                user_email=user_email,
+                message=message,
+                history=history,
+                approved_bill_id=approved_bill_id,
+                idempotency_key=idempotency_key,
+            )
         if settings.LLM_PROVIDER.lower() != "gemini":
-            raise HTTPException(status_code=503, detail={"code": "dependency_unavailable", "message": "LLM provider is not Gemini."})
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "dependency_unavailable", "message": "LLM_PROVIDER must be groq or gemini."},
+            )
         if not settings.GEMINI_API_KEY:
             raise HTTPException(
                 status_code=503,
@@ -585,6 +604,248 @@ class AgentService:
                 )
             # Gemini SDK 1.x expects function responses under role="user"
             contents.append(types.Content(role="user", parts=fn_response_parts))
+        else:
+            reply = "I reached the tool-call limit. Please ask about a specific bill or payment status."
+
+        return {
+            "reply": reply or "I could not produce a response.",
+            "tool_trace": tool_trace,
+            "enforcement_mode": settings.ARMORIQ_ENFORCEMENT,
+            "model": active_model,
+            "conversation_id": request_id,
+        }
+
+    def _chat_groq(
+        self,
+        db: Session,
+        household_id: str,
+        user_email: str,
+        message: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        approved_bill_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not settings.GROQ_API_KEY:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "dependency_unavailable", "message": "GROQ_API_KEY is not configured on the backend."},
+            )
+
+        try:
+            from groq import Groq
+        except ImportError as e:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "dependency_unavailable", "message": f"groq is not installed: {e}"},
+            ) from e
+
+        client = Groq(api_key=settings.GROQ_API_KEY)
+        request_id = str(uuid.uuid4())
+        model_chain = [settings.GROQ_MODEL, *settings.groq_model_fallbacks]
+        active_model = settings.GROQ_MODEL
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for turn in history or []:
+            messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
+        messages.append({"role": "user", "content": message})
+        tools = [{"type": "function", "function": declaration} for declaration in TOOL_DECLARATIONS]
+        tool_trace: List[Dict[str, Any]] = []
+        approved_bill_loaded = False
+        reply = ""
+
+        logger.info(
+            "Agent request started request_id=%s provider=groq model=%s approved_bill=%s",
+            request_id,
+            active_model,
+            bool(approved_bill_id),
+        )
+
+        for step in range(6):
+            response = None
+            start_index = model_chain.index(active_model)
+            for model_index in range(start_index, len(model_chain)):
+                model_name = model_chain[model_index]
+                max_attempts = 3 if model_name == settings.GROQ_MODEL else 1
+                for attempt in range(max_attempts):
+                    try:
+                        response = client.chat.completions.create(
+                            model=model_name,
+                            messages=messages,
+                            tools=tools,
+                            tool_choice="auto",
+                            temperature=0.2,
+                        )
+                        active_model = model_name
+                        logger.info(
+                            "Groq response received request_id=%s model=%s step=%d attempt=%d",
+                            request_id,
+                            model_name,
+                            step + 1,
+                            attempt + 1,
+                        )
+                        break
+                    except Exception as e:
+                        provider_status = getattr(e, "status_code", None)
+                        retryable = provider_status in (429, 500, 502, 503, 504)
+                        fallbackable = provider_status in (400, 403, 404, 429, 500, 502, 503, 504)
+                        if retryable and attempt < max_attempts - 1:
+                            delay = 0.5 * (2**attempt)
+                            logger.warning(
+                                "Groq transient failure request_id=%s model=%s provider_status=%s "
+                                "attempt=%d retry_in_seconds=%.1f",
+                                request_id,
+                                model_name,
+                                provider_status,
+                                attempt + 1,
+                                delay,
+                            )
+                            time.sleep(delay)
+                            continue
+
+                        has_fallback = model_index < len(model_chain) - 1
+                        if fallbackable and has_fallback:
+                            logger.warning(
+                                "Groq switching model request_id=%s failed_model=%s next_model=%s "
+                                "provider_status=%s",
+                                request_id,
+                                model_name,
+                                model_chain[model_index + 1],
+                                provider_status,
+                            )
+                            break
+
+                        logger.error(
+                            "Groq request failed request_id=%s model=%s provider_status=%s "
+                            "attempt=%d error_type=%s message=%s",
+                            request_id,
+                            model_name,
+                            provider_status,
+                            attempt + 1,
+                            type(e).__name__,
+                            str(e)[:300],
+                        )
+                        raise HTTPException(
+                            status_code=503,
+                            detail={
+                                "code": "dependency_unavailable",
+                                "message": (
+                                    f"Configured Groq models are unavailable (last HTTP {provider_status}). "
+                                    "Please try again shortly."
+                                    if provider_status
+                                    else "Configured Groq models are unavailable. Please try again shortly."
+                                ),
+                            },
+                        ) from e
+
+                if response is not None:
+                    break
+
+            if response is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "dependency_unavailable",
+                        "message": "Configured Groq models are unavailable. Please try again shortly.",
+                    },
+                )
+
+            choice = response.choices[0]
+            assistant_message = choice.message
+            function_calls = list(assistant_message.tool_calls or [])
+            if not function_calls:
+                reply = (assistant_message.content or "").strip()
+                logger.info(
+                    "Agent response completed request_id=%s provider=groq steps=%d tools=%d",
+                    request_id,
+                    step + 1,
+                    len(tool_trace),
+                )
+                break
+
+            logger.info(
+                "Groq requested tools request_id=%s step=%d tools=%s",
+                request_id,
+                step + 1,
+                ",".join(call.function.name for call in function_calls),
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.content,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for call in function_calls
+                    ],
+                }
+            )
+
+            for call in function_calls:
+                name = call.function.name
+                try:
+                    raw_args = json.loads(call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    raw_args = None
+                if not isinstance(raw_args, dict):
+                    logger.warning(
+                        "Groq tool call rejected request_id=%s tool=%s reason=invalid_arguments",
+                        request_id,
+                        name,
+                    )
+                    result: Any = {
+                        "error": "invalid_tool_arguments",
+                        "message": "Tool arguments must be a JSON object.",
+                    }
+                elif approved_bill_id:
+                    if name == "get_bill" and raw_args.get("bill_id") == approved_bill_id:
+                        result = self._run_tool(
+                            db, household_id, name, raw_args, user_email, message, request_id, active_model
+                        )
+                        approved_bill_loaded = not result.get("error")
+                    elif name == "propose_payment" and raw_args.get("bill_id") == approved_bill_id and approved_bill_loaded:
+                        result = self._run_tool(
+                            db,
+                            household_id,
+                            name,
+                            {"bill_id": approved_bill_id, "idempotency_key": idempotency_key},
+                            user_email,
+                            message,
+                            request_id,
+                            active_model,
+                        )
+                    else:
+                        result = {
+                            "error": "approval_scope_violation",
+                            "message": "Only the approved bill may be processed.",
+                        }
+                elif name == "propose_payment":
+                    logger.warning(
+                        "Groq payment tool rejected request_id=%s reason=explicit_bill_scope_required",
+                        request_id,
+                    )
+                    result = {
+                        "error": "payment_scope_required",
+                        "message": "Payment tools are available only from an explicit, backend-scoped bill request.",
+                    }
+                else:
+                    result = self._run_tool(
+                        db, household_id, name, raw_args, user_email, message, request_id, active_model
+                    )
+
+                tool_trace.append({"tool": name, "arguments": raw_args, "result": result})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "name": name,
+                        "content": json.dumps(result, separators=(",", ":"), default=str),
+                    }
+                )
         else:
             reply = "I reached the tool-call limit. Please ask about a specific bill or payment status."
 

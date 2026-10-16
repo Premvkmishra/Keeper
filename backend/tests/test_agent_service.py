@@ -247,6 +247,117 @@ def test_gemini_exhausted_transient_retries_returns_provider_status(db, monkeypa
     assert "HTTP 503" in exc_info.value.detail["message"]
 
 
+def test_groq_tool_call_uses_armoriq_and_returns_followup_response(db, monkeypatch):
+    import groq
+
+    monkeypatch.setattr(config.settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(config.settings, "GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setattr(config.settings, "GROQ_MODEL", "openai/gpt-oss-20b")
+
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-1",
+                                function=SimpleNamespace(name="list_bills", arguments="{}"),
+                            )
+                        ],
+                    )
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="There are no bills.", tool_calls=[])
+                )
+            ]
+        ),
+    ]
+    requests = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            return responses.pop(0)
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(groq, "Groq", FakeClient)
+
+    from backend.app.services import agent_service
+
+    calls = []
+
+    def invoke_tool(name, params, **kwargs):
+        calls.append((name, params, kwargs))
+        return GatewayResult(status="allowed_and_executed", payload={"bills": []})
+
+    monkeypatch.setattr(agent_service.armoriq_gateway, "invoke_tool", invoke_tool)
+    result = AgentService().chat(
+        db=db,
+        household_id="household-id",
+        user_email="owner@example.test",
+        message="List bills.",
+    )
+
+    assert result["reply"] == "There are no bills."
+    assert result["model"] == "openai/gpt-oss-20b"
+    assert calls[0][0] == "list_bills"
+    assert calls[0][1]["authorization_context"]
+    assert calls[0][2]["model_name"] == "openai/gpt-oss-20b"
+    assert requests[1]["messages"][-1]["role"] == "tool"
+
+
+def test_groq_falls_back_after_model_not_found(db, monkeypatch):
+    import groq
+
+    monkeypatch.setattr(config.settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(config.settings, "GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setattr(config.settings, "GROQ_MODEL", "groq-primary")
+    monkeypatch.setattr(config.settings, "GROQ_FALLBACK_MODELS", "groq-fallback")
+
+    models_called = []
+
+    class NotFoundError(Exception):
+        status_code = 404
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            models_called.append(kwargs["model"])
+            if kwargs["model"] == "groq-primary":
+                raise NotFoundError("model not found")
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="Read-only response.", tool_calls=[])
+                    )
+                ]
+            )
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(groq, "Groq", FakeClient)
+    result = AgentService().chat(
+        db=db,
+        household_id="household-id",
+        user_email="owner@example.test",
+        message="List bills.",
+    )
+
+    assert models_called == ["groq-primary", "groq-fallback"]
+    assert result["model"] == "groq-fallback"
+    assert result["reply"] == "Read-only response."
+
+
 def test_household_bootstrap_creates_owner_and_is_idempotent(client, db):
     import uuid
 

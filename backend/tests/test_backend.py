@@ -299,6 +299,7 @@ def test_high_value_payment_requires_approval_and_resumes(client, seed_data, db,
     db.commit()
 
     for name, value in {
+        "LLM_PROVIDER": "gemini",
         "ARMORIQ_ENFORCEMENT": "required",
         "ARMORIQ_ROUTE": "proxy",
         "ARMORIQ_API_KEY": "test-key",
@@ -430,6 +431,7 @@ def test_approval_schedules_agent_processing_when_services_are_configured(
     token = make_auth_token(seed_data["owner_id"], "owner@test.com")
     headers = {"Authorization": f"Bearer {token}"}
     for name, value in {
+        "LLM_PROVIDER": "gemini",
         "ARMORIQ_ENFORCEMENT": "required",
         "ARMORIQ_ROUTE": "proxy",
         "ARMORIQ_API_KEY": "test-key",

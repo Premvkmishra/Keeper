@@ -103,11 +103,15 @@ Required variables:
 - `ARMORIQ_API_KEY`: Server-side ArmorIQ API key.
 - `KEEPER_MCP_PUBLIC_URL`: Public HTTPS MCP URL ending in `/mcp`, registered in ArmorIQ.
 - `KEEPER_MCP_INBOUND_SECRET`: Shared secret for bearer authentication on `/mcp`.
-- `GEMINI_API_KEY`: Server-side Gemini API key.
+- `LLM_PROVIDER`: Agent LLM provider, `groq` (default) or `gemini`.
+- `GROQ_API_KEY`: Server-side Groq API key; keep it out of source control.
+- `GROQ_MODEL`: Primary Groq model (default: `openai/gpt-oss-20b`).
+- `GROQ_FALLBACK_MODELS`: Comma-separated Groq fallback models (default: `openai/gpt-oss-120b`). Transient failures retry the primary, then try each fallback once; all configured models must support tool use.
+- `GEMINI_API_KEY`: Server-side Gemini API key when `LLM_PROVIDER=gemini`.
 - `GEMINI_MODEL`: Primary Gemini model (default: `gemini-2.5-flash`).
 - `GEMINI_FALLBACK_MODELS`: Comma-separated Gemini fallback models (default: `gemini-2.5-flash-lite,gemini-2.5-pro`). Transient failures retry the primary, then try each fallback once; all models must support the configured tool-calling request.
 
-The agent currently uses the Gemini Developer API. Gemma is an open-weight model family and is not a Gemini API model-ID fallback. A final Gemma fallback requires a separately deployed Vertex AI endpoint, its serving-container request/response format, and Vertex credentials for the backend runtime. When the endpoint is provisioned, the adapter will need its full resource name (`projects/{project}/locations/{location}/endpoints/{endpoint}`), location, and runtime service-account access to invoke it. Do not add a Gemma model ID to `GEMINI_FALLBACK_MODELS`; until that endpoint adapter is implemented and configured, Gemini failover returns an explicit unavailable response.
+The agent uses Groq by default and retains the Gemini Developer API as an alternative. Groq tool calls are handled by the backend and still execute through ArmorIQ; the provider change does not bypass authorization or payment policy. Groq model availability can change; configure only model IDs enabled for your Groq account.
 
 The frontend uses Supabase Auth email/password sign-in and sign-up. New accounts create a private household and default policy after authentication; Supabase email confirmation may need to be completed before sign-in, depending on the project’s Auth settings. There is no built-in demo-token login fallback.
 
