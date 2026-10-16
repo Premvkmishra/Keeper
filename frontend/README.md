@@ -15,12 +15,12 @@ Safe bill payments for older adults. Talks only to the Keeper FastAPI backend; S
 
 The backend must allow this frontend's origin via CORS.
 
-## Production hosting (Railway frontend)
+## Production hosting (Vercel)
 
-- Build command: `npm run build`
-- Start command: `npm run start`
-- Set `PORT` through Railway and configure `VITE_API_BASE_URL` to the public Render API URL and the two `VITE_SUPABASE_*` values at build time.
-- Add the deployed Railway origin to the backend's `CORS_ORIGINS`.
+- Set the Vercel project root directory to `frontend`.
+- Use Node.js 24.x, the default install command, and `npm run build` as the build command. Nitro's Vercel preset generates the deployment output; do not configure a static output directory or start command.
+- Configure `VITE_API_BASE_URL` as the public Render API URL (for example, `https://keeper-api-prod.onrender.com`, without a trailing slash), plus `VITE_SUPABASE_URL` and the public `VITE_SUPABASE_ANON_KEY`. These `VITE_*` values are embedded in the browser bundle at build time.
+- Add the exact deployed Vercel origin to the backend's `CORS_ORIGINS`, preserving existing origins, then redeploy the backend.
 - Set the Supabase Auth Site URL and allowed redirect URLs to the deployed frontend origin.
 - Supabase's built-in email sender is limited to 2 emails per hour and only sends to project team addresses. Configure custom SMTP in Supabase Auth to send confirmation emails to Gmail and other recipients; do not disable email confirmation to work around rate limits.
 
